@@ -1,4 +1,5 @@
-"""Aktif projenin ayarlarını yükler.
+"""Aktif projenin ayarlarını yükler. yapılandırma dosyası, config 
+
 
 Proje seçimi (öncelik sırasıyla):
   1. --project <id> argümanı
@@ -129,6 +130,7 @@ def load_project(project_id: str | None = None) -> Project:
     return project
 
 
+#projeyi seçiyor , env dosyasındaki project değişkenini okuyor ve projeyi yüklüyor
 def cli_project(description: str) -> Project:
     """Script'ler için ortak giriş: --project argümanını okur ve projeyi yükler."""
     parser = argparse.ArgumentParser(description=description)

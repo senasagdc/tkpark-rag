@@ -15,14 +15,15 @@
   "chunking": {
     "strategy": "heading",
     "headingPatterns": [
-      "^\\d+\\.\\d+\\.\\d+\\.\\s",
-      "^\\d+\\.\\d+\\.\\s",
-      "^\\d+\\.\\s",
-      "^[a-zçğıöşü]\\.\\s"
+      "^\\d+\\.\\s+(?=[A-ZÇĞİÖŞÜ]{2})",
+      "^\\d+\\.\\d+\\.(?=\\s|$|[A-ZÇĞİÖŞÜ])",
+      "^\\d+\\.\\d+\\.\\d+\\.(?=\\s|$|[A-ZÇĞİÖŞÜ])",
+      "^[a-zçğıöşü]\\.\\s+(?=[A-ZÇĞİÖŞÜ])"
     ],
     "bullet": "•",
-    "maxChars": 1200,
-    "fallback": { "strategy": "fixed", "size": 1000, "overlap": 150 }
+    "maxTokens": 300,
+    "overlap": 50,
+    "fallback": { "strategy": "fixed", "maxTokens": 300, "overlap": 50 }
   },
 
   "embedding": { "provider": "e5", "model": "intfloat/multilingual-e5-small" },

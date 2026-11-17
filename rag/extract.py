@@ -3,6 +3,7 @@
 Kullanım:
     python rag/extract.py                 # .env › PROJECT
     python rag/extract.py --project <id>
+
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from config import ROOT, ConfigError, cli_project
 from loaders import get_loader
 
 SCHEMA_VERSION = 1
-LOW_TEXT_CHARS = 50  # yalnızca uyarı: bu kadar az metinli sayfa taranmış olabilir
+LOW_TEXT_CHARS = 50  # az textli metinleri ayıralım ama yalnızca uyarı, görsel veya taranmış belge olabilir diye.
 
 
 def main() -> int:
@@ -50,6 +51,7 @@ def main() -> int:
         })
         pages_out.extend({"source": src["path"], **p} for p in loaded["pages"])
 
+
     output = {
         "schemaVersion": SCHEMA_VERSION,
         "project": project.id,
@@ -58,6 +60,7 @@ def main() -> int:
         "pages": pages_out,
     }
 
+    # json'u olustur
     project.index_dir.mkdir(parents=True, exist_ok=True)
     out_file = project.index_dir / "pages.json"
     out_file.write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")

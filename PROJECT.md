@@ -3,13 +3,19 @@
 ## Durum
 **Part 1 / Adım 1.2 + 1.2b tamamlandı (17.11.2026).** `PROJECT=yonerge python rag/extract.py` → 41 sayfa, s. 1–4 atlandı, 37 sayfa / ~148 bin karakter → `index/yonerge/pages.json`. Türkçe karakterler ve `•` sorunsuz.
 
-**17.11.2026 — Kaldığımız yer (1.3 / 1.4 hazırlığı tamam, kod henüz yazılmadı):**
-- Embedding kararı `project.json`'a işlendi: `yonerge` ve `_template` → `e5` / `intfloat/multilingual-e5-small`; `yonerge` › `chunking.maxChars` = 1200.
+**17.11.2026 — 1.3 Chunking tamamlandı.** `python rag/chunk.py` → 96 bölüm, 186 chunk, 58–298 token (medyan 227; ~205–1426 karakter), `passage:` öneki ve özel tokenlarla en fazla 302 token (512 sınırının altında), metin kaybı yok → `index/yonerge/chunks.json`.
+- Yöntem: önce numaralı başlığa göre bölme (bölüm sınırı asla aşılmaz), 300 tokenı aşan bölümler kendi içinde LangChain `RecursiveCharacterTextSplitter` ile `•` → satır → cümle sınırlarından bölünür, overlap 50 token (yalnızca aynı bölüm içinde; madde sınırında bölündüğünde örtüşme olmayabilir).
+- Boyut **token** ile ölçülür: splitter'ın `length_function`'ı embedding modelinin tokenizer'ı (`embedding.model`'den okunur, kodda model adı yok). Embedding modeli değişirse chunking de yeniden çalıştırılır. Her chunk'ın başında başlık yolu var: `7. … > 7.1. … > 7.1.5. …`.
+- Hukuki birim = numaralı bölüm. Bu belgede `MADDE N` yapısı yok; metin kendi içinde "6.4. maddesinde" diye bu numaralara atıf yapıyor.
+- PDF'te görülen başlık biçimleri: `7.1.5. Başlık`, numara tek satırda + alt satırda BÜYÜK HARF başlık (`10.1.`), boşluksuz `8.1.BAŞLIK`, alt satıra taşan büyük harfli başlık. `headingPatterns` bunlara göre güncellendi (üstten alta sıralı).
+
+**17.11.2026 — 1.3 / 1.4 hazırlığı:**
+- Embedding kararı `project.json`'a işlendi: `yonerge` ve `_template` → `e5` / `intfloat/multilingual-e5-small`; chunking boyutu sonra token'a çevrildi (`maxTokens` 300, `overlap` 50).
 - `requirements.txt`'e `sentence-transformers` eklendi ve `.venv`'e kuruldu (sentence-transformers 6.3, torch 2.15, transformers 5.23).
 - Model indirildi ve yerel önbellekte; kısa test: 384 boyut, normalize (norm 1.0), `max_seq_length` 512. Önekli örnekte ilgili cümle 0.867, ilgisiz 0.775 → sıralama doğru, puanlar birbirine yakın (e5'te normal; eşik 1.5'te).
 - `prompts/`, `guardrails/`, `eval/` henüz yok; ilgili adımda (1.6, 1.7, Part 4) oluşturulacak.
 
-**Sıradaki: 1.3 Chunking** → `rag/chunk.py`, ardından 1.4 → `rag/providers/__init__.py`, `rag/providers/e5.py`, `rag/embed.py`.
+**Sıradaki: 1.4 Embedding** → `rag/providers/__init__.py`, `rag/providers/e5.py`, `rag/embed.py`.
 
 **17.11.2026 — Embedding kararı:** Deneysel aşamada kapsam küçük tutulacak. Embedding için yerel **`intfloat/multilingual-e5-small`** kullanılacak (adaptör: `e5`). API anahtarı ve kota gerekmez, aynı girdi her zaman aynı vektörü verir. Gemini embedding adaptörü sonra eklenebilir; geçiş `project.json`'da tek satır değişikliktir. Bugünün hedefi: **Document Processing + Embedding Pipeline** (temizlik → yapı tespiti → chunking → embedding → kaydet ve doğrula).
 
@@ -93,14 +99,15 @@ tkpark-ragagent/
   "chunking": {
     "strategy": "heading",
     "headingPatterns": [
-      "^\\d+\\.\\d+\\.\\d+\\.\\s",
-      "^\\d+\\.\\d+\\.\\s",
-      "^\\d+\\.\\s",
-      "^[a-zçğıöşü]\\.\\s"
+      "^\\d+\\.\\s+(?=[A-ZÇĞİÖŞÜ]{2})",
+      "^\\d+\\.\\d+\\.(?=\\s|$|[A-ZÇĞİÖŞÜ])",
+      "^\\d+\\.\\d+\\.\\d+\\.(?=\\s|$|[A-ZÇĞİÖŞÜ])",
+      "^[a-zçğıöşü]\\.\\s+(?=[A-ZÇĞİÖŞÜ])"
     ],
     "bullet": "•",
-    "maxChars": 1200,
-    "fallback": { "strategy": "fixed", "size": 1000, "overlap": 150 }
+    "maxTokens": 300,
+    "overlap": 50,
+    "fallback": { "strategy": "fixed", "maxTokens": 300, "overlap": 50 }
   },
 
   "embedding": { "provider": "e5", "model": "intfloat/multilingual-e5-small" },
@@ -122,7 +129,8 @@ tkpark-ragagent/
   }
 }
 ```
-- `maxChars: 1200`: E5 en fazla 512 token alır ve fazlasını sessizce keser. Türkçe metin çok token ürettiği için 1500 karakter bu sınıra yaklaşabilir. Gerçek token sayısı 1.4'teki doğrulamada kontrol edilir.
+- `headingPatterns` üst seviyeden alta sıralıdır (1. eleman = 1. seviye); eşleşen kısım bölüm numarasıdır, kalan metin başlıktır.
+- `maxTokens: 300`, `overlap: 50`: token, embedding modelinin tokenizer'ıyla sayılır (başlık yolu dahil; `passage:` öneki ve özel tokenlar hariç). E5 en fazla 512 token alır ve fazlasını sessizce keser; 300 bu önekler ve pay için yer bırakır. 1.4'te önekli gerçek giriş yeniden doğrulanır.
 - `minScore` 1.5'teki retrieval testinden sonra ayarlanacak (Part 4'te konu dışı guardrail'i de bunu kullanacak).
 - Başlığı olmayan bir belgede `strategy: "fixed"` kullanılır; `heading` stratejisi hiçbir başlık bulamazsa `fallback`'e düşülür.
 
@@ -138,7 +146,7 @@ tkpark-ragagent/
       "id": "yonerge-7.1.5-0",
       "text": "…",
       "vector": [0.012, -0.044, …],
-      "metadata": { "source": "data/yonerge.pdf", "section": "7.1.5", "title": "…", "pdfPages": [18, 19] }
+      "metadata": { "source": "data/yonerge.pdf", "section": "7.1.5", "title": "…", "path": ["7. …", "7.1. …", "7.1.5. …"], "pages": [13, 14] }
     }
   ]
 }
@@ -160,7 +168,7 @@ Seçim `project.json` → `"provider": "e5"` ile yapılır. Yeni bir sağlayıc�
 - Node (Part 2): `src/providers/embedding/e5.js`, `@huggingface/transformers` (transformers.js) + `Xenova/multilingual-e5-small` (ONNX). Böylece çalışma anında tek sunucu (Node) kararı korunur.
 - Önekler: `kind="document"` → `"passage: "`, `kind="query"` → `"query: "`. Önekler olmadan kalite belirgin düşer.
 - Model düz `e5-small` değil, **multilingual** sürüm olmalı (düz sürüm İngilizce için eğitildi).
-- Giriş sınırı 512 token; aşan metin kesilir. Bu yüzden `chunking.maxChars` küçük tutulur ve 1.4'te token sayısı doğrulanır.
+- Giriş sınırı 512 token; aşan metin kesilir. Bu yüzden `chunking.maxTokens` 300 tutulur ve 1.4'te önekli token sayısı doğrulanır.
 - Python ve Node aynı soru için aynı vektörü üretmeli; Part 2'de bir kez karşılaştırılır.
 - Kalite yetmezse sırasıyla `intfloat/multilingual-e5-base` / `-large` veya `gemini` adaptörü denenir (tek satır değişiklik + indeksi yeniden oluşturma).
 
@@ -201,10 +209,10 @@ Seçim `project.json` → `"provider": "e5"` ile yapılır. Yeni bir sağlayıc�
     - `rag/extract.py`: belge yolu ve `skipPages` config'ten gelsin; PDF okuma `rag/loaders/pdf.py`'de; çıktı `index/<id>/pages.json`
     - `requirements.txt` (`pymupdf`)
     - Kontrol: kodda `grep -ri "yonerge\|teknopark" rag/` sonuç vermemeli
-  - [ ] 1.3 Temizlik + yapı tespiti + chunking (`heading` + `fixed` stratejileri, kalıplar config'ten) → `index/<id>/chunks.json`
+  - [x] 1.3 Temizlik + yapı tespiti + chunking (`heading` + `fixed` stratejileri, kalıplar config'ten) → `index/<id>/chunks.json`
     - Text cleaning: PDF satır sonlarını birleştir, boş satır ve fazla boşlukları temizle
     - Structure detection: `headingPatterns` ile başlık hiyerarşisi (`section`, `title`)
-    - Chunking: bölüm bazlı, `maxChars` aşılırsa `bullet` sınırlarından böl
+    - Chunking: bölüm bazlı, `maxTokens` aşılırsa `bullet` sınırlarından böl
   - [ ] 1.4 Embeddings (`e5` adaptörü, `multilingual-e5-small`) → `index/<id>/index.json`
     - [x] Hazırlık: `project.json` e5'e geçti, `sentence-transformers` kuruldu, model indirildi ve test edildi
     - Save & validate: vektör sayısı = chunk sayısı, tüm vektörler 384 boyutlu ve normalize, önekle birlikte hiçbir chunk 512 tokeni aşmıyor
@@ -243,7 +251,8 @@ Not: Yerel JSON birkaç bin chunk'a kadar yeterli. Daha büyük projelerde vekt�
 - `rag/loaders/` — `get_loader(type)` kaydı; `pdf.py` (PyMuPDF, `skipPages` uygular, PDF tarihini ISO'ya çevirir)
 - `rag/extract.py` — tüm `sources` → `index/<id>/pages.json`
   (`schemaVersion`, `project`, `createdAt`, `sources[]` meta, `pages[]` = `{source, page, text}`; `page` = PDF sayfa sırası)
-- `requirements.txt` — `pymupdf`, `sentence-transformers` (PyTorch ile birlikte gelir). `multilingual-e5-small` modeli (~470 MB) ilk kullanımda Hugging Face'ten bir kez indirilir ve yerel önbellekte tutulur.
+- `rag/chunk.py` — `pages.json` → `index/<id>/chunks.json` (`chunks[]` = `{id, text, tokens, metadata: {source, section, title, path, pages}}`; `id` = `<proje>-<bölüm>-<sıra>`, `pages` = kaynak sayfa sırası). Satır birleştirme, başlık tespiti, bölüm içi bölme; sınırı aşan chunk varsa hata koduyla çıkar.
+- `requirements.txt` — `pymupdf`, `sentence-transformers` (PyTorch ile birlikte gelir), `langchain-text-splitters`. `multilingual-e5-small` modeli (~470 MB) ilk kullanımda Hugging Face'ten bir kez indirilir ve yerel önbellekte tutulur.
 - `package.json` — Node tarafı (Part 2'de doldurulacak)
 
 ## Nasıl çalıştırılır
@@ -253,12 +262,13 @@ python3 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 python rag/extract.py              # veya: python rag/extract.py --project yonerge
+python rag/chunk.py
 ```
 Beklenen: `Sayfa sayısı: 41`, `Atlanan sayfalar: [1, 2, 3, 4]`, `Alınan sayfalar: 37`, `Az metinli sayfalar: []`, `Oluşturulma tarihi: 2025-01-28`.
 
 ## Mevcut sınırlamalar
-- Satırlar PDF satır sonlarıyla bölünmüş; birleştirme chunking adımında yapılacak.
-- Sayfa başlarında boş satırlar ve fazladan boşluklar olabiliyor (temizlik chunking'de).
+- `pages.json` ham metindir; satır birleştirme ve boşluk temizliği `chunk.py`'de yapılır.
+- Paragraf sınırı sezgiseldir: satır `. : ; ! ?` ile bitiyorsa, boş satır, `•` veya `Terim:` ile başlıyorsa yeni blok. Yanlış birleşme yalnızca bölme noktasını etkiler, metin kaybolmaz.
 
 ## Repo durumu (17.11.2026)
 - Remote: `origin` → `github.com/senasagdc/tkpark-rag` (doğru adres).
@@ -270,7 +280,6 @@ Beklenen: `Sayfa sayısı: 41`, `Atlanan sayfalar: [1, 2, 3, 4]`, `Alınan sayfa
 - Bilinen küçük tutarsızlık: `.env.example` yorumu Gemini anahtarının 1.4'te gerektiğini söylüyor; e5 kararıyla artık yalnızca 1.6 (LLM) için gerekli.
 
 ## Sonraki adım (bugünün hedefi: Document Processing + Embedding Pipeline)
-1. 1.3 Temizlik + yapı tespiti + chunking: `project.json` › `chunking` ayarlarıyla başlık bazlı bölümleme, uzun bölümleri `bullet` sınırlarından bölme,
-   her chunk'a `source`, `section`, `title`, `pdfPages` metadata'sı ekleme. Kalıplar kodda değil config'te.
+1. ~~1.3 Chunking~~ ✓
 2. 1.4 Embedding: `rag/providers/e5.py` + `rag/embed.py` → `index/<id>/index.json`, ardından doğrulama (boyut, normalizasyon, 512 token).
 3. Hızlı deney: 10 soruyla `search.py`; doğru bölüm ilk 5'te değilse önce chunking'e, sonra modele bakılır.

@@ -14,8 +14,8 @@
 
   "chunking": {
     "strategy": "fixed",
-    "size": 1000,
-    "overlap": 150
+    "maxTokens": 300,
+    "overlap": 50
   },
 
   "embedding": { "provider": "e5", "model": "intfloat/multilingual-e5-small" },
