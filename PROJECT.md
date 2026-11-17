@@ -15,7 +15,12 @@
 - Model indirildi ve yerel önbellekte; kısa test: 384 boyut, normalize (norm 1.0), `max_seq_length` 512. Önekli örnekte ilgili cümle 0.867, ilgisiz 0.775 → sıralama doğru, puanlar birbirine yakın (e5'te normal; eşik 1.5'te).
 - `prompts/`, `guardrails/`, `eval/` henüz yok; ilgili adımda (1.6, 1.7, Part 4) oluşturulacak.
 
-**Sıradaki: 1.4 Embedding** → `rag/providers/__init__.py`, `rag/providers/e5.py`, `rag/embed.py`.
+**17.11.2026 — 1.4 Embedding tamamlandı.** `python rag/embed.py` → 186 chunk, 384 boyut, hepsi normalize, önekli giriş (özel tokenlar dahil) en fazla 302 / 512 token → `index/yonerge/index.json` (1.1 MB, ~4 sn, CPU).
+- `rag/providers/`: `get_provider(embedding_cfg)` kaydı + `e5.py` adaptörü (`passage:` / `query:` önekleri yalnızca adaptörde). Boyut ve token sınırı modelden okunur, kodda sabit yok.
+- `embed.py` kaydetmeden önce doğrular (sayı, boyut, NaN, norm, token sınırı, chunks.json'un aynı tokenizer'la üretilmesi); hata varsa `index.json` yazılmaz.
+- İlk hızlı kontrol: "Ortak alanlar nasıl kullanılır?" → 7.1.7 (ilk 3'ün hepsi), "Kira ödemesi gecikirse…" → 7.2.1. "Firma kabul şartları nelerdir?" → ilk 3'te 7.1.5 / 7.2.1 / 7.1.6; beklenen 10.1 (Aday Girişimci Başvuru…) ilk 3'te değil. Puanlar 0.84–0.86 aralığında, birbirine çok yakın → 1.5'te incelenecek.
+
+**Sıradaki: 1.5 Retrieval testi** → `rag/search.py` + 10 soruluk deney (doğru bölüm ilk 5'te mi?), ardından `topK` / `minScore`.
 
 **17.11.2026 — Embedding kararı:** Deneysel aşamada kapsam küçük tutulacak. Embedding için yerel **`intfloat/multilingual-e5-small`** kullanılacak (adaptör: `e5`). API anahtarı ve kota gerekmez, aynı girdi her zaman aynı vektörü verir. Gemini embedding adaptörü sonra eklenebilir; geçiş `project.json`'da tek satır değişikliktir. Bugünün hedefi: **Document Processing + Embedding Pipeline** (temizlik → yapı tespiti → chunking → embedding → kaydet ve doğrula).
 
@@ -213,10 +218,10 @@ Seçim `project.json` → `"provider": "e5"` ile yapılır. Yeni bir sağlayıc�
     - Text cleaning: PDF satır sonlarını birleştir, boş satır ve fazla boşlukları temizle
     - Structure detection: `headingPatterns` ile başlık hiyerarşisi (`section`, `title`)
     - Chunking: bölüm bazlı, `maxTokens` aşılırsa `bullet` sınırlarından böl
-  - [ ] 1.4 Embeddings (`e5` adaptörü, `multilingual-e5-small`) → `index/<id>/index.json`
+  - [x] 1.4 Embeddings (`e5` adaptörü, `multilingual-e5-small`) → `index/<id>/index.json`
     - [x] Hazırlık: `project.json` e5'e geçti, `sentence-transformers` kuruldu, model indirildi ve test edildi
-    - Save & validate: vektör sayısı = chunk sayısı, tüm vektörler 384 boyutlu ve normalize, önekle birlikte hiçbir chunk 512 tokeni aşmıyor
-    - **Deney başarı ölçütü:** 10 soruda doğru bölüm `search.py` ile ilk 5 sonuçta geliyor
+    - [x] Save & validate: vektör sayısı = chunk sayısı, tüm vektörler 384 boyutlu ve normalize, önekle birlikte hiçbir chunk 512 tokeni aşmıyor
+    - **Deney başarı ölçütü (1.5'te):** 10 soruda doğru bölüm `search.py` ile ilk 5 sonuçta geliyor
   - [ ] 1.5 Retrieval testi (LLM yok) → `minScore`/`topK` belirlenir
   - [ ] 1.6 LLM + backend'de üretilen kaynaklar (prompt `prompts/system.md`'den)
   - [ ] 1.7 Değerlendirme seti (`projects/<id>/eval/testset.jsonl`, değerlendirme scripti genel)
@@ -252,6 +257,8 @@ Not: Yerel JSON birkaç bin chunk'a kadar yeterli. Daha büyük projelerde vekt�
 - `rag/extract.py` — tüm `sources` → `index/<id>/pages.json`
   (`schemaVersion`, `project`, `createdAt`, `sources[]` meta, `pages[]` = `{source, page, text}`; `page` = PDF sayfa sırası)
 - `rag/chunk.py` — `pages.json` → `index/<id>/chunks.json` (`chunks[]` = `{id, text, tokens, metadata: {source, section, title, path, pages}}`; `id` = `<proje>-<bölüm>-<sıra>`, `pages` = kaynak sayfa sırası). Satır birleştirme, başlık tespiti, bölüm içi bölme; sınırı aşan chunk varsa hata koduyla çıkar.
+- `rag/providers/` — embedding adaptörleri; `get_provider(cfg)` kaydı ve `EmbeddingProvider` arayüzü (`embed`, `count_tokens`, `dimensions`, `normalized`, `token_limit`). `e5.py`: sentence-transformers, önekler, `normalize_embeddings=True`, isteğe bağlı `embedding.batchSize` (varsayılan 32).
+- `rag/embed.py` — `chunks.json` → `index/<id>/index.json` (`schemaVersion`, `project`, `createdAt`, `embedding` = config + `dimensions` + `normalized`, `chunking`, `chunks[]` = `{id, text, vector, metadata}`; vektörler 7 ondalığa yuvarlanır). Doğrulama başarısızsa çıkış kodu 2, dosya yazılmaz.
 - `requirements.txt` — `pymupdf`, `sentence-transformers` (PyTorch ile birlikte gelir), `langchain-text-splitters`. `multilingual-e5-small` modeli (~470 MB) ilk kullanımda Hugging Face'ten bir kez indirilir ve yerel önbellekte tutulur.
 - `package.json` — Node tarafı (Part 2'de doldurulacak)
 
@@ -263,6 +270,7 @@ source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 python rag/extract.py              # veya: python rag/extract.py --project yonerge
 python rag/chunk.py
+python rag/embed.py
 ```
 Beklenen: `Sayfa sayısı: 41`, `Atlanan sayfalar: [1, 2, 3, 4]`, `Alınan sayfalar: 37`, `Az metinli sayfalar: []`, `Oluşturulma tarihi: 2025-01-28`.
 
@@ -277,9 +285,8 @@ Beklenen: `Sayfa sayısı: 41`, `Atlanan sayfalar: [1, 2, 3, 4]`, `Alınan sayfa
 - `.env.example` eklendi; yerel `.env` ondan kopyalandı (anahtar boş).
 - API anahtarı hiçbir dosyada yok.
 - Kullanılmayan `.vscode/` klasörü silindi.
-- Bilinen küçük tutarsızlık: `.env.example` yorumu Gemini anahtarının 1.4'te gerektiğini söylüyor; e5 kararıyla artık yalnızca 1.6 (LLM) için gerekli.
 
 ## Sonraki adım (bugünün hedefi: Document Processing + Embedding Pipeline)
 1. ~~1.3 Chunking~~ ✓
-2. 1.4 Embedding: `rag/providers/e5.py` + `rag/embed.py` → `index/<id>/index.json`, ardından doğrulama (boyut, normalizasyon, 512 token).
-3. Hızlı deney: 10 soruyla `search.py`; doğru bölüm ilk 5'te değilse önce chunking'e, sonra modele bakılır.
+2. ~~1.4 Embedding~~ ✓
+3. Hızlı deney (1.5): 10 soruyla `search.py`; doğru bölüm ilk 5'te değilse önce chunking'e, sonra modele bakılır.
