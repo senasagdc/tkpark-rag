@@ -10,6 +10,9 @@ Sağlayıcı ve model project.json › embedding'den okunur. Kaydetmeden önce d
   - sağlayıcı normalize diyorsa her vektörün normu 1
   - önek ve özel tokenlar dahil hiçbir chunk modelin token sınırını aşmıyor (aşan sessizce kesilirdi)
   - chunks.json, project.json'daki embedding modeliyle aynı tokenizer'la üretilmiş
+  - chunks.json güncel: chunking ayarları project.json ile aynı, pages.json'dan eski değil
+index.json › embedding'e yalnızca vektörü belirleyen alanlar yazılır (provider, model,
+dimensions, normalized); batchSize gibi çalışma ayarları yazılmaz.
 Doğrulama başarısızsa index.json yazılmaz ve hata koduyla çıkılır.
 """
 
@@ -71,8 +74,32 @@ def main() -> int:
         print("chunks.json boş.", file=sys.stderr)
         return 1
 
+    # chunks.json eski mi? (project.json › chunking değişti ya da extract yeniden çalıştı ama chunk.py çalışmadı)
+    rerun = "Önce chunking'i yeniden çalıştır: python rag/chunk.py"
+    stored_chunking = chunk_data.get("chunking")
+    if not isinstance(stored_chunking, dict):
+        print(f"chunks.json chunking ayarlarını içermiyor. {rerun}", file=sys.stderr)
+        return 1
+    current_chunking = project.get("chunking")
+    strip = lambda d: {k: v for k, v in d.items() if k != "tokenizer"}  # tokenizer aşağıda ayrıca kontrol edilir
+    if strip(stored_chunking) != strip(current_chunking):
+        changed = sorted(
+            k for k in set(strip(stored_chunking)) | set(strip(current_chunking))
+            if stored_chunking.get(k) != current_chunking.get(k)
+        )
+        print(
+            f"chunks.json, project.json'daki güncel chunking ayarlarıyla üretilmemiş "
+            f"(farklı alanlar: {', '.join(changed)}). {rerun}",
+            file=sys.stderr,
+        )
+        return 1
+    pages_file = project.index_dir / "pages.json"
+    if pages_file.exists() and pages_file.stat().st_mtime > chunks_file.stat().st_mtime:
+        print(f"pages.json, chunks.json'dan daha yeni (extract yeniden çalışmış). {rerun}", file=sys.stderr)
+        return 1
+
     # chunking token sayımı farklı bir tokenizer'la yapıldıysa maxTokens garantisi geçersizdir
-    chunk_tokenizer = chunk_data.get("chunking", {}).get("tokenizer")
+    chunk_tokenizer = stored_chunking.get("tokenizer")
     if chunk_tokenizer and chunk_tokenizer != emb_cfg.get("model"):
         print(
             f"chunks.json '{chunk_tokenizer}' tokenizer'ıyla üretilmiş, embedding modeli "
@@ -108,8 +135,10 @@ def main() -> int:
         "schemaVersion": SCHEMA_VERSION,
         "project": project.id,
         "createdAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        # yalnızca vektörü belirleyen alanlar; batchSize gibi çalışma ayarları yazılmaz
         "embedding": {
-            **emb_cfg,
+            "provider": emb_cfg.get("provider"),
+            "model": emb_cfg.get("model"),
             "dimensions": provider.dimensions,
             "normalized": provider.normalized,
         },

@@ -18,6 +18,7 @@
 **17.11.2026 — 1.4 Embedding tamamlandı.** `python rag/embed.py` → 186 chunk, 384 boyut, hepsi normalize, önekli giriş (özel tokenlar dahil) en fazla 302 / 512 token → `index/yonerge/index.json` (1.1 MB, ~4 sn, CPU).
 - `rag/providers/`: `get_provider(embedding_cfg)` kaydı + `e5.py` adaptörü (`passage:` / `query:` önekleri yalnızca adaptörde). Boyut ve token sınırı modelden okunur, kodda sabit yok.
 - `embed.py` kaydetmeden önce doğrular (sayı, boyut, NaN, norm, token sınırı, chunks.json'un aynı tokenizer'la üretilmesi); hata varsa `index.json` yazılmaz.
+- **17.11.2026 düzeltme:** `index.json › embedding`'e yalnızca vektörü belirleyen alanlar yazılır (`provider`, `model`, `dimensions`, `normalized`); `batchSize` gibi çalışma ayarları yazılmaz → Node yalnızca `provider` + `model`'i karşılaştırır. `embed.py` ayrıca eski `chunks.json`'ı yakalar: `project.json › chunking` ile `chunks.json`'daki ayarlar farklıysa ya da `pages.json` daha yeniyse durur ve `chunk.py`'yi önerir. Dört senaryo test edildi (maxTokens, headingPatterns, batchSize, yeni pages.json); indeks yeniden üretildi.
 - İlk hızlı kontrol: "Ortak alanlar nasıl kullanılır?" → 7.1.7 (ilk 3'ün hepsi), "Kira ödemesi gecikirse…" → 7.2.1. "Firma kabul şartları nelerdir?" → ilk 3'te 7.1.5 / 7.2.1 / 7.1.6; beklenen 10.1 (Aday Girişimci Başvuru…) ilk 3'te değil. Puanlar 0.84–0.86 aralığında, birbirine çok yakın → 1.5'te incelenecek.
 
 **Sıradaki: 1.5 Retrieval testi** → `rag/search.py` + 10 soruluk deney (doğru bölüm ilk 5'te mi?), ardından `topK` / `minScore`.
@@ -258,7 +259,7 @@ Not: Yerel JSON birkaç bin chunk'a kadar yeterli. Daha büyük projelerde vekt�
   (`schemaVersion`, `project`, `createdAt`, `sources[]` meta, `pages[]` = `{source, page, text}`; `page` = PDF sayfa sırası)
 - `rag/chunk.py` — `pages.json` → `index/<id>/chunks.json` (`chunks[]` = `{id, text, tokens, metadata: {source, section, title, path, pages}}`; `id` = `<proje>-<bölüm>-<sıra>`, `pages` = kaynak sayfa sırası). Satır birleştirme, başlık tespiti, bölüm içi bölme; sınırı aşan chunk varsa hata koduyla çıkar.
 - `rag/providers/` — embedding adaptörleri; `get_provider(cfg)` kaydı ve `EmbeddingProvider` arayüzü (`embed`, `count_tokens`, `dimensions`, `normalized`, `token_limit`). `e5.py`: sentence-transformers, önekler, `normalize_embeddings=True`, isteğe bağlı `embedding.batchSize` (varsayılan 32).
-- `rag/embed.py` — `chunks.json` → `index/<id>/index.json` (`schemaVersion`, `project`, `createdAt`, `embedding` = config + `dimensions` + `normalized`, `chunking`, `chunks[]` = `{id, text, vector, metadata}`; vektörler 7 ondalığa yuvarlanır). Doğrulama başarısızsa çıkış kodu 2, dosya yazılmaz.
+- `rag/embed.py` — `chunks.json` → `index/<id>/index.json` (`schemaVersion`, `project`, `createdAt`, `embedding` = `provider` + `model` + `dimensions` + `normalized`, `chunking`, `chunks[]` = `{id, text, vector, metadata}`; vektörler 7 ondalığa yuvarlanır). Doğrulama başarısızsa çıkış kodu 2, dosya yazılmaz. `chunks.json` eskiyse (chunking ayarları değişmiş ya da `pages.json` daha yeni) çıkış kodu 1.
 - `requirements.txt` — `pymupdf`, `sentence-transformers` (PyTorch ile birlikte gelir), `langchain-text-splitters`. `multilingual-e5-small` modeli (~470 MB) ilk kullanımda Hugging Face'ten bir kez indirilir ve yerel önbellekte tutulur.
 - `package.json` — Node tarafı (Part 2'de doldurulacak)
 
