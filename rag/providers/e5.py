@@ -1,5 +1,7 @@
 """E5 ailesi (ör. intfloat/multilingual-e5-small) — sentence-transformers ile yerelde.
 
+ADAPTER
+
 E5 modelleri önekle eğitildi: belge parçaları "passage: ", sorular "query: " ile başlar.
 Önekler yalnızca bu adaptörün içinde kalır; çekirdek sadece kind="document"|"query" iletir.
 Vektörler normalize edilir → cosine benzerliği = dot product.
