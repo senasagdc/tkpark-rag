@@ -1,7 +1,7 @@
 # PROJECT.md — Yeniden Kullanılabilir RAG Chatbot (ilk proje: Teknopark Yönergesi)
 
 ## Durum
-**Part 1 / Adım 1.2 — Text extraction (Python + PyMuPDF) tasarlandı, ancak `rag/config.py`, `rag/extract.py` ve `requirements.txt` bu makinedeki repoya hiç gelmedi (17.11.2026'da tespit edildi). 1.2b ile birlikte, doğrudan genelleştirilmiş hâliyle yeniden yazılacak.**
+**Part 1 / Adım 1.2 + 1.2b tamamlandı (17.11.2026).** `PROJECT=yonerge python rag/extract.py` → 41 sayfa, s. 1–4 atlandı, 37 sayfa / ~148 bin karakter → `index/yonerge/pages.json`. Türkçe karakterler ve `•` sorunsuz. Sıradaki: **1.3 Chunking**.
 
 **17.11.2026 — Yeni karar:** Sistem yönergeye özel olmayacak. Kod genel, içerik projeye özel olacak; yeni bir belge veya müşteri için yalnızca bir proje klasörü hazırlanacak. → **Adım 1.2b** (aşağıda) 1.3'ten önce yapılacak.
 
@@ -155,7 +155,7 @@ Seçim `project.json` → `"provider": "gemini"` ile yapılır. Yeni bir sağlay
 9. `npm start` → arayüz yeni projenin başlık ve metinleriyle açılır
 
 ## İlk proje paketi: `yonerge` — belge notları
-- Dosya: `projects/yonerge/data/yonerge.pdf` (taşınmadan önce: `data/yonerge.pdf`)
+- Dosya: `projects/yonerge/data/yonerge.pdf`
 - Başlık: YTÜ Yıldız Teknopark Bölge İşletme Yönergesi (bir "yönerge"; Bakanlık yönetmeliği değil)
 - 41 PDF sayfası, ~18.000 kelime, Word'den üretilmiş, metin katmanı var → OCR gerekmiyor
 - Tarih: Metinde onay/yürürlük tarihi veya sürüm yok. PDF metadata oluşturulma tarihi: 2025-01-28.
@@ -172,8 +172,8 @@ Seçim `project.json` → `"provider": "gemini"` ile yapılır. Yeni bir sağlay
 ## Yol haritası
 - **Part 1 — RAG çekirdeği (Python, terminal)**
   - [x] 1.1 PDF incelemesi
-  - [ ] 1.2 Text extraction (PyMuPDF) → `index/<id>/pages.json` — dosyalar repoda yok, 1.2b ile birlikte yazılacak
-  - [ ] **1.2b Genelleştirme** (1.3'ten önce)
+  - [x] 1.2 Text extraction (PyMuPDF) → `index/<id>/pages.json`
+  - [x] **1.2b Genelleştirme**
     - `projects/yonerge/` ve `projects/_template/` klasörlerini oluştur, PDF'i taşı, `project.json` yaz
     - `rag/config.py`: `PROJECT` → `project.json` okuma + doğrulama (eksik alan varsa açık hata)
     - `rag/extract.py`: belge yolu ve `skipPages` config'ten gelsin; PDF okuma `rag/loaders/pdf.py`'de; çıktı `index/<id>/pages.json`
@@ -208,7 +208,14 @@ Not: Yerel JSON birkaç bin chunk'a kadar yeterli. Daha büyük projelerde vekt�
 
 ## Dosyalar
 - `.env.example` — ortam değişkenleri şablonu (`PORT`, `PROJECT`, `GEMINI_API_KEY`); `.env` git'e girmez
-- `data/yonerge.pdf` — kaynak belge (1.2b'de `projects/yonerge/data/`'ya taşınacak)
+- `projects/yonerge/project.json` — ilk proje paketi ayarları; `projects/_template/` — yeni proje şablonu
+- `rag/config.py` — `--project` / `PROJECT` / `.env` ile proje seçer, `project.json`'ı okur ve doğrular
+  (`id` = klasör adı, `sources[].path` ve `type` dolu ve dosya mevcut). `project.get("a.b")` eksik alanda açık hata verir.
+  `.env` kendi küçük okuyucusuyla okunur (ek bağımlılık yok); tanımlı ortam değişkenleri önceliklidir.
+- `rag/loaders/` — `get_loader(type)` kaydı; `pdf.py` (PyMuPDF, `skipPages` uygular, PDF tarihini ISO'ya çevirir)
+- `rag/extract.py` — tüm `sources` → `index/<id>/pages.json`
+  (`schemaVersion`, `project`, `createdAt`, `sources[]` meta, `pages[]` = `{source, page, text}`; `page` = PDF sayfa sırası)
+- `requirements.txt` — `pymupdf`
 - `package.json` — Node tarafı (Part 2'de doldurulacak)
 
 ## Nasıl çalıştırılır
@@ -217,9 +224,9 @@ cp .env.example .env               # GEMINI_API_KEY'i 1.4'te doldur
 python3 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-PROJECT=yonerge python rag/extract.py
+python rag/extract.py              # veya: python rag/extract.py --project yonerge
 ```
-Beklenen: `Sayfa sayısı: 41`, `Az metinli sayfalar: [1]`, `PDF oluşturulma tarihi: 2025-01-28`.
+Beklenen: `Sayfa sayısı: 41`, `Atlanan sayfalar: [1, 2, 3, 4]`, `Alınan sayfalar: 37`, `Az metinli sayfalar: []`, `Oluşturulma tarihi: 2025-01-28`.
 
 ## Mevcut sınırlamalar
 - Satırlar PDF satır sonlarıyla bölünmüş; birleştirme chunking adımında yapılacak.
@@ -233,6 +240,5 @@ Beklenen: `Sayfa sayısı: 41`, `Az metinli sayfalar: [1]`, `PDF oluşturulma ta
 - API anahtarı hiçbir dosyada yok.
 
 ## Sonraki adım
-1. **1.2 + 1.2b birlikte:** proje paketi yapısı (`projects/yonerge/`, `_template/`), `rag/config.py`, `rag/loaders/pdf.py`, `rag/extract.py`, `requirements.txt` → `PROJECT=yonerge python rag/extract.py` ile doğrula → commit.
-2. 1.3 Chunking: `project.json` › `chunking` ayarlarıyla başlık bazlı bölümleme, uzun bölümleri `bullet` sınırlarından bölme,
+1. 1.3 Chunking: `project.json` › `chunking` ayarlarıyla başlık bazlı bölümleme, uzun bölümleri `bullet` sınırlarından bölme,
    her chunk'a `source`, `section`, `title`, `pdfPages` metadata'sı ekleme. Kalıplar kodda değil config'te.
