@@ -21,11 +21,11 @@
       "^[a-zçğıöşü]\\.\\s"
     ],
     "bullet": "•",
-    "maxChars": 1500,
+    "maxChars": 1200,
     "fallback": { "strategy": "fixed", "size": 1000, "overlap": 150 }
   },
 
-  "embedding": { "provider": "gemini", "model": "gemini-embedding-2" },
+  "embedding": { "provider": "e5", "model": "intfloat/multilingual-e5-small" },
   "llm":       { "provider": "gemini", "model": "gemini-3.5-flash-lite", "temperature": 0.1 },
   "retrieval": { "topK": 5, "minScore": 0.0 },
 
