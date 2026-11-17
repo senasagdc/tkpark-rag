@@ -1,0 +1,9 @@
+{
+  "name": "tkpark-rag",
+  "version": "0.1.0",
+  "description": "Yönetmelik PDF'i üzerinde kaynak gösteren RAG chatbot demosu",
+  "type": "module",
+  "private": true,
+  "engines": { "node": ">=22.9" },
+  "scripts": {}
+}

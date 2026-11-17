@@ -1,0 +1,17 @@
+# Gizli ayarlar (.env.example repoya girer)
+.env
+
+# Üretilen indeksler (proje alt klasörleri dahil)
+index/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Sistem
+.DS_Store
