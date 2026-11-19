@@ -1,0 +1,13 @@
+{"id": "q01", "question": "Firma kabul şartları nelerdir?", "expected": ["10.1"], "difficulty": "zor"}
+{"id": "q02", "question": "Ortak alanlar nasıl kullanılır?", "expected": ["7.1.7"], "difficulty": "kolay"}
+{"id": "q03", "question": "Kira veya aidat ödemesi gecikirse ne olur?", "expected": ["7.2.1"], "difficulty": "orta"}
+{"id": "q04", "question": "Ofisimde tadilat yapmak için izin almam gerekir mi?", "expected": ["7.1.4"], "difficulty": "kolay"}
+{"id": "q05", "question": "Teknoparktan ayrılmak istersem kaç gün önce haber vermeliyim?", "expected": ["7.1.10"], "difficulty": "orta"}
+{"id": "q06", "question": "Personelin bölgede çalıştığı nasıl takip ediliyor?", "expected": ["7.1.8"], "difficulty": "zor"}
+{"id": "q07", "question": "Aylık muafiyet raporu ne zamana kadar teslim edilir?", "expected": ["13.1"], "difficulty": "orta"}
+{"id": "q08", "question": "Yazılım satışlarında KDV istisnası var mı?", "expected": ["11.2"], "difficulty": "orta"}
+{"id": "q09", "question": "Kuluçka merkezinden ne zaman mezun olunur?", "expected": ["15.5"], "difficulty": "orta"}
+{"id": "q10", "question": "Öğretim üyeleri teknoparkta çalışabilir mi?", "expected": ["16.1"], "difficulty": "kolay"}
+{"id": "x01", "question": "İstanbul'da bugün hava nasıl?", "expected": [], "difficulty": "konu dışı"}
+{"id": "x02", "question": "Bana bir makarna tarifi verir misin?", "expected": [], "difficulty": "konu dışı"}
+{"id": "x03", "question": "Galatasaray dün kaç gol attı?", "expected": [], "difficulty": "konu dışı"}

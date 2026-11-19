@@ -21,7 +21,23 @@
 - **17.11.2026 düzeltme:** `index.json › embedding`'e yalnızca vektörü belirleyen alanlar yazılır (`provider`, `model`, `dimensions`, `normalized`); `batchSize` gibi çalışma ayarları yazılmaz → Node yalnızca `provider` + `model`'i karşılaştırır. `embed.py` ayrıca eski `chunks.json`'ı yakalar: `project.json › chunking` ile `chunks.json`'daki ayarlar farklıysa ya da `pages.json` daha yeniyse durur ve `chunk.py`'yi önerir. Dört senaryo test edildi (maxTokens, headingPatterns, batchSize, yeni pages.json); indeks yeniden üretildi.
 - İlk hızlı kontrol: "Ortak alanlar nasıl kullanılır?" → 7.1.7 (ilk 3'ün hepsi), "Kira ödemesi gecikirse…" → 7.2.1. "Firma kabul şartları nelerdir?" → ilk 3'te 7.1.5 / 7.2.1 / 7.1.6; beklenen 10.1 (Aday Girişimci Başvuru…) ilk 3'te değil. Puanlar 0.84–0.86 aralığında, birbirine çok yakın → 1.5'te incelenecek.
 
-**Sıradaki: 1.5 Retrieval testi** → `rag/search.py` + 10 soruluk deney (doğru bölüm ilk 5'te mi?), ardından `topK` / `minScore`.
+**19.11.2026 — 1.5 Retrieval testi (devam ediyor).** `python rag/search.py --eval` → soru seti `projects/yonerge/eval/retrieval.jsonl` (10 ilgili + 3 konu dışı soru; `expected` = doğru sayılan `metadata.section` değerleri, boş liste = konu dışı).
+- `rag/search.py`: soru `query:` önekiyle embed edilir, tüm chunk'larla dot product (normalize → cosine), brute-force sıralama. Tek soru modu (`python rag/search.py "soru"`) ve `--eval` modu (Hit@1/3/5, MRR, doğru bölümün sırası, ilgili / konu dışı puan aralığı). `topK`, `minScore` ve soru seti yolu (`eval.retrieval`, varsayılan `eval/retrieval.jsonl`) `project.json`'dan okunur. `index.json` ile `project.json`'daki embedding `provider` + `model` uyuşmazsa çalışmaz.
+- **Model karşılaştırması** (aynı chunk'lar: iki model aynı tokenizer'ı kullanıyor, 186 chunk, en fazla 298 token):
+
+  | Ölçüt | e5-small | e5-base |
+  |---|---|---|
+  | Hit@1 / @3 / @5 | 5 / 6 / 7 (10'da) | 6 / 9 / **9** (10'da) |
+  | MRR | 0.588 | 0.721 |
+  | İlgili sorularda en düşük 1. sonuç puanı | 0.8405 | 0.8038 |
+  | Konu dışı sorularda en yüksek puan | 0.8201 | 0.7840 |
+
+  Doğru bölümün sırası (small → base): q01 77→3, q05 13→2, q06 5→1, q09 2→1, q08 1→3, q10 11→21; diğerleri 1→1.
+- **Karar:** `yonerge` → `intfloat/multilingual-e5-base` (768 boyut, `index.json` ~1.9 MB). Daha büyük model "kabul şartı → başvuru/komisyon", "ayrılmak → fesih" gibi anlam bağlantılarını kuruyor. `_template` hâlâ `e5-small`.
+- **Açık sorun:** q10 "Öğretim üyeleri…" (metinde "öğretim elemanları"; 16.2 / 16.3 / 8.2.1 öne geçiyor) ilk 5'te değil. Bu kelime farkı sorunu; model değiştirerek çözülmüyor → BM25 + embedding (hybrid) sonra denenecek.
+- **minScore:** ilgili ≥ 0.8038 > konu dışı ≤ 0.7840; aday değer ~0.79, ancak boşluk yalnızca 0.02 ve 3 konu dışı soru var → daha fazla konu dışı soruyla kesinleştirilecek. `retrieval.minScore` henüz 0.0.
+
+**Sıradaki:** BM25 hybrid (q10 için), konu dışı soruları artırıp `minScore`'u sabitlemek, ardından 1.6.
 
 **17.11.2026 — Embedding kararı:** Deneysel aşamada kapsam küçük tutulacak. Embedding için yerel **`intfloat/multilingual-e5-small`** kullanılacak (adaptör: `e5`). API anahtarı ve kota gerekmez, aynı girdi her zaman aynı vektörü verir. Gemini embedding adaptörü sonra eklenebilir; geçiş `project.json`'da tek satır değişikliktir. Bugünün hedefi: **Document Processing + Embedding Pipeline** (temizlik → yapı tespiti → chunking → embedding → kaydet ve doğrula).
 
@@ -116,7 +132,7 @@ tkpark-ragagent/
     "fallback": { "strategy": "fixed", "maxTokens": 300, "overlap": 50 }
   },
 
-  "embedding": { "provider": "e5", "model": "intfloat/multilingual-e5-small" },
+  "embedding": { "provider": "e5", "model": "intfloat/multilingual-e5-base" },
   "llm":       { "provider": "gemini", "model": "gemini-3.5-flash-lite", "temperature": 0.1 },
   "retrieval": { "topK": 5, "minScore": 0.0 },
 
@@ -146,7 +162,7 @@ tkpark-ragagent/
   "schemaVersion": 1,
   "project": "yonerge",
   "createdAt": "2026-11-18T10:00:00Z",
-  "embedding": { "provider": "e5", "model": "intfloat/multilingual-e5-small", "dimensions": 384, "normalized": true },
+  "embedding": { "provider": "e5", "model": "intfloat/multilingual-e5-base", "dimensions": 768, "normalized": true },
   "chunks": [
     {
       "id": "yonerge-7.1.5-0",
@@ -224,6 +240,8 @@ Seçim `project.json` → `"provider": "e5"` ile yapılır. Yeni bir sağlayıc�
     - [x] Save & validate: vektör sayısı = chunk sayısı, tüm vektörler 384 boyutlu ve normalize, önekle birlikte hiçbir chunk 512 tokeni aşmıyor
     - **Deney başarı ölçütü (1.5'te):** 10 soruda doğru bölüm `search.py` ile ilk 5 sonuçta geliyor
   - [ ] 1.5 Retrieval testi (LLM yok) → `minScore`/`topK` belirlenir
+    - [x] `rag/search.py` + `eval/retrieval.jsonl`; e5-small 7/10 → e5-base 9/10 (Hit@5), `yonerge` e5-base'e geçti
+    - [ ] q10 (BM25 hybrid), `minScore` kesinleştirme
   - [ ] 1.6 LLM + backend'de üretilen kaynaklar (prompt `prompts/system.md`'den)
   - [ ] 1.7 Değerlendirme seti (`projects/<id>/eval/testset.jsonl`, değerlendirme scripti genel)
 - **Part 2 — Web API (Node/Express):** `POST /api/chat`, `GET /api/config` (arayüz metinleri), aktif projenin `index.json`'ını okur, açılışta embedding uyumu kontrolü
@@ -239,7 +257,7 @@ Bunlar varsayılanlardır. Sağlayıcı ve model `project.json`'dan seçildiği 
 |---|---|
 | Python | 3.11+ (test: 3.13), sanal ortam `.venv` |
 | PDF extraction | PyMuPDF (`pymupdf`) — `rag/loaders/pdf.py` |
-| Embedding | Yerel `intfloat/multilingual-e5-small`, 384 boyut (adaptör: `e5`). Alternatif: Gemini `gemini-embedding-2` (adaptör: `gemini`) |
+| Embedding | Yerel `intfloat/multilingual-e5-base`, 768 boyut (adaptör: `e5`; 1.5'te e5-small'dan geçildi, `_template` hâlâ small). Alternatif: Gemini `gemini-embedding-2` (adaptör: `gemini`) |
 | LLM | Gemini `gemini-3.5-flash-lite` (adaptör: `gemini`) |
 | SDK | Embedding: Python `sentence-transformers`, Node `@huggingface/transformers`. LLM: Python `google-genai`, Node `@google/genai` (yalnızca adaptör dosyalarında) |
 | Vector store | Yerel JSON + cosine similarity (proje başına bir `index.json`) |
@@ -260,7 +278,8 @@ Not: Yerel JSON birkaç bin chunk'a kadar yeterli. Daha büyük projelerde vekt�
 - `rag/chunk.py` — `pages.json` → `index/<id>/chunks.json` (`chunks[]` = `{id, text, tokens, metadata: {source, section, title, path, pages}}`; `id` = `<proje>-<bölüm>-<sıra>`, `pages` = kaynak sayfa sırası). Satır birleştirme, başlık tespiti, bölüm içi bölme; sınırı aşan chunk varsa hata koduyla çıkar.
 - `rag/providers/` — embedding adaptörleri; `get_provider(cfg)` kaydı ve `EmbeddingProvider` arayüzü (`embed`, `count_tokens`, `dimensions`, `normalized`, `token_limit`). `e5.py`: sentence-transformers, önekler, `normalize_embeddings=True`, isteğe bağlı `embedding.batchSize` (varsayılan 32).
 - `rag/embed.py` — `chunks.json` → `index/<id>/index.json` (`schemaVersion`, `project`, `createdAt`, `embedding` = `provider` + `model` + `dimensions` + `normalized`, `chunking`, `chunks[]` = `{id, text, vector, metadata}`; vektörler 7 ondalığa yuvarlanır). Doğrulama başarısızsa çıkış kodu 2, dosya yazılmaz. `chunks.json` eskiyse (chunking ayarları değişmiş ya da `pages.json` daha yeni) çıkış kodu 1.
-- `requirements.txt` — `pymupdf`, `sentence-transformers` (PyTorch ile birlikte gelir), `langchain-text-splitters`. `multilingual-e5-small` modeli (~470 MB) ilk kullanımda Hugging Face'ten bir kez indirilir ve yerel önbellekte tutulur.
+- `rag/search.py` — retrieval testi (LLM yok): tek soru veya `--eval` (Hit@k, MRR, puan aralıkları); soru seti `projects/<id>/eval/retrieval.jsonl`.
+- `requirements.txt` — `pymupdf`, `sentence-transformers` (PyTorch ile birlikte gelir), `langchain-text-splitters`. Seçilen e5 modeli ilk kullanımda Hugging Face'ten bir kez indirilir ve yerel önbellekte tutulur.
 - `package.json` — Node tarafı (Part 2'de doldurulacak)
 
 ## Nasıl çalıştırılır
