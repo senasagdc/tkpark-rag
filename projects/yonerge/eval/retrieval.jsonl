@@ -11,3 +11,6 @@
 {"id": "x01", "question": "İstanbul'da bugün hava nasıl?", "expected": [], "difficulty": "konu dışı"}
 {"id": "x02", "question": "Bana bir makarna tarifi verir misin?", "expected": [], "difficulty": "konu dışı"}
 {"id": "x03", "question": "Galatasaray dün kaç gol attı?", "expected": [], "difficulty": "konu dışı"}
+{"id": "u01", "question": "Yemekhane saat kaçta açılıyor?", "expected": [], "difficulty": "cevapsız", "note": "Belgede yemekhane geçmiyor"}
+{"id": "u02", "question": "Ofis kirası metrekare başına kaç TL?", "expected": [], "difficulty": "cevapsız", "note": "7.2.1 birim/metrekare fiyatından söz ediyor, rakam yok"}
+{"id": "u03", "question": "Teknoparkın genel müdürü kim?", "expected": [], "difficulty": "cevapsız", "note": "3'te Genel Müdür tanımı var, kişi adı yok"}

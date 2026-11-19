@@ -125,7 +125,7 @@ def run_eval(index: Index, items: list[dict], k: int, min_score: float) -> int:
             print(f"  beklenen: {', '.join(it['expected'])} → {status}")
             in_scope.append({"id": it["id"], "rank": rank, "top": top, "correct": correct})
         else:
-            off_scope.append({"id": it["id"], "top": top})
+            off_scope.append({"id": it["id"], "top": top, "group": label or "beklenen bölüm yok"})
         print_results(index, scores, k, min_score, it["expected"])
 
     # --- Özet ---
@@ -147,20 +147,27 @@ def run_eval(index: Index, items: list[dict], k: int, min_score: float) -> int:
         if corrects:
             print(f"  Doğru bölümün puanı              : min {min(corrects):.4f} / max {max(corrects):.4f}")
 
-    if off_scope:
-        offs = [r["top"] for r in off_scope]
-        print(f"Konu dışı sorular: {len(off_scope)}")
+    # Beklenen bölümü olmayan sorular, difficulty etiketine göre ayrı gruplarda raporlanır
+    # (ör. "konu dışı" = belgeyle ilgisiz, "cevapsız" = konusu belgede ama cevabı yok).
+    groups: dict[str, list[dict]] = {}
+    for r in off_scope:
+        groups.setdefault(r["group"], []).append(r)
+    low_in = min(r["top"] for r in in_scope) if n else None
+    for name, rows in groups.items():
+        offs = [r["top"] for r in rows]
+        print(f"Beklenen bölümü olmayan ({name}): {len(rows)}")
         print(f"  En yüksek puan: min {min(offs):.4f} / max {max(offs):.4f}")
-        if n:
-            low_in = min(r["top"] for r in in_scope)
-            high_off = max(offs)
-            gap = low_in - high_off
-            if gap > 0:
-                print(f"  Ayrım VAR: ilgili sorular ≥ {low_in:.4f} > konu dışı ≤ {high_off:.4f} "
-                      f"(boşluk {gap:.4f}) → minScore bu aralıktan seçilebilir.")
-            else:
-                print(f"  Ayrım YOK: konu dışı en yüksek {high_off:.4f} ≥ ilgili en düşük {low_in:.4f} "
-                      f"→ tek bir minScore ikisini ayıramaz.")
+        if low_in is None:
+            continue
+        caught = [r["id"] for r in rows if r["top"] < low_in]
+        leaked = [f"{r['id']} ({r['top']:.4f})" for r in rows if r["top"] >= low_in]
+        if not leaked:
+            print(f"  Ayrım VAR: ilgili ≥ {low_in:.4f} > {name} ≤ {max(offs):.4f} "
+                  f"(boşluk {low_in - max(offs):.4f}) → minScore bu aralıktan seçilebilir.")
+        else:
+            print(f"  Ayrım YOK: ilgili sorulardan ayrılamayanlar: {', '.join(leaked)}"
+                  f"{'; ayrılabilenler: ' + ', '.join(caught) if caught else ''}"
+                  f" → bunları minScore değil LLM ('bilgim yok') yakalamalı.")
     print(f"Ayarlar: topK={k}, minScore={min_score}")
     return 0
 
