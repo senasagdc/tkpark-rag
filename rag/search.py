@@ -166,7 +166,9 @@ def run_eval(index: Index, items: list[dict], k: int, min_score: float) -> int:
 
 
 def main() -> int:
+    # Çıktı dosyaya/pipe'a yönlendirilince Windows yerel kod sayfasını (cp1254) kullanır → UTF-8'e zorla.
     sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description="Retrieval testi (LLM yok).")
     parser.add_argument("question", nargs="?", help="aranacak soru")
     parser.add_argument("--eval", action="store_true", help="proje soru setiyle deneyi çalıştır")

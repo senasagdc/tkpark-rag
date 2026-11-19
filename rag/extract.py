@@ -20,6 +20,9 @@ LOW_TEXT_CHARS = 50  # az textli metinleri ayıralım ama yalnızca uyarı, gör
 
 
 def main() -> int:
+    # Çıktı dosyaya/pipe'a yönlendirilince Windows yerel kod sayfasını (cp1254) kullanır → UTF-8'e zorla.
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
     try:
         project = cli_project("Kaynak belgelerden sayfa metinlerini çıkarır.")
     except ConfigError as e:

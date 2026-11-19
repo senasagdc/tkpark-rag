@@ -57,6 +57,9 @@ def validate(chunks: list[dict], vectors: list[list[float]], token_counts: list[
 
 
 def main() -> int:
+    # Çıktı dosyaya/pipe'a yönlendirilince Windows yerel kod sayfasını (cp1254) kullanır → UTF-8'e zorla.
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
     try:
         project = cli_project("Chunk'ları embed eder ve indeksi kaydeder.")
         emb_cfg = project.get("embedding")

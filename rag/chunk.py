@@ -286,6 +286,9 @@ def chunk_fixed(lines: list[Line | None], fixed_cfg: dict, bullet, count: Counte
 # ---------------------------------------------------------------- ana akış
 
 def main() -> int:
+    # Çıktı dosyaya/pipe'a yönlendirilince Windows yerel kod sayfasını (cp1254) kullanır → UTF-8'e zorla.
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
     try:
         project = cli_project("Sayfa metinlerini temizler, bölümlere ayırır ve chunk'lar.")
         cfg = project.get("chunking")
