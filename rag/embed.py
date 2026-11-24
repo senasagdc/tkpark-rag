@@ -1,23 +1,27 @@
-"""chunks.json → embedding → HNSW indeksi
+"""chunks.json → embedding → FAISS indeksi (flat, kesin arama)
 
 Kullanım:
     python rag/embed.py                 # .env › PROJECT
     python rag/embed.py --project <id>
 
 Çıktılar (index/<proje-id>/):
-  hnsw.bin     HNSW indeksi (hnswlib). Etiket i = index.json › chunks[i]
-  index.json   chunk metinleri + metadata + embedding ve HNSW ayarları (vektörler hnsw.bin'de)
+  faiss.index  FAISS IndexFlatIP. Vektör i = index.json › chunks[i]
+  index.json   chunk metinleri + metadata + embedding ve vectorStore ayarları (vektörler faiss.index'te)
+
+Neden flat: IndexFlatIP soruyu bütün vektörlerle karşılaştırır (kesin arama, ayar gerektirmez).
+Vektörler normalize olduğu için iç çarpım (IP) = cosine benzerliği. Birkaç bin chunk'a kadar
+yaklaşık aramadan (HNSW) daha hızlıdır; çok büyürse faiss.IndexHNSWFlat'e geçilebilir.
 
 Ayarlar:
   project.json › embedding    model, passagePrefix, queryPrefix, batchSize (isteğe bağlı, varsayılan 32)
-  project.json › vectorStore  space, M, efConstruction, efSearch
-  project.json › retrieval    topK (recall kontrolünde kullanılır)
+  project.json › vectorStore  type: "flat"
+  project.json › retrieval    topK (kontrol aramasında kullanılır)
 
 Kaydetmeden önce doğrular:
   - chunks.json güncel (chunking ayarları aynı, pages.json'dan eski değil, aynı tokenizer)
   - önek ve özel tokenlar dahil hiçbir chunk modelin token sınırını aşmıyor (aşan sessizce kesilirdi)
   - vektör sayısı = chunk sayısı, NaN yok, her vektörün normu 1
-  - HNSW recall@topK = 1.0 (diskten okunan indeksin sonuçları kesin aramayla aynı)
+  - diskten okunan FAISS indeksinin ilk topK sonucu, bellekteki vektörlerle yapılan kesin aramayla aynı
 Doğrulama başarısızsa hiçbir dosya yazılmaz ve hata koduyla çıkılır.
 """
 
@@ -28,7 +32,7 @@ import sys
 import time
 from datetime import datetime, timezone
 
-import hnswlib
+import faiss
 import numpy as np
 from sentence_transformers import SentenceTransformer
 
@@ -36,8 +40,8 @@ from config import ROOT, ConfigError, cli_project
 
 SCHEMA_VERSION = 2
 NORM_TOLERANCE = 1e-3
-HNSW_SEED = 100        # her çalıştırmada aynı graf oluşsun
-HNSW_FILE = "hnsw.bin"
+INDEX_FILE = "faiss.index"
+SUPPORTED_TYPES = ("flat",)
 
 
 def stale_chunks_reason(project, chunk_data: dict, chunks_file, model: str) -> str | None:
@@ -58,9 +62,9 @@ def stale_chunks_reason(project, chunk_data: dict, chunks_file, model: str) -> s
     return None
 
 
-def recall_at_k(index: hnswlib.Index, vectors: np.ndarray, k: int) -> float:
-    """Her chunk vektörünü soru gibi kullanır; HNSW'nin ilk k sonucunu kesin aramayla karşılaştırır."""
-    labels, _ = index.knn_query(vectors, k=k)
+def search_matches_exact(index: faiss.Index, vectors: np.ndarray, k: int) -> float:
+    """Her chunk vektörünü soru gibi kullanır; FAISS'in ilk k sonucunu numpy ile kesin aramayla karşılaştırır."""
+    _, labels = index.search(vectors, k)
     exact = np.argsort(-(vectors @ vectors.T), axis=1)[:, :k]
     hits = sum(len(set(a) & set(b)) for a, b in zip(labels, exact))
     return hits / (len(vectors) * k)
@@ -68,12 +72,11 @@ def recall_at_k(index: hnswlib.Index, vectors: np.ndarray, k: int) -> float:
 
 def main() -> int:
     try:
-        project = cli_project("Chunk'ları embed eder ve HNSW indeksini kaydeder.")
+        project = cli_project("Chunk'ları embed eder ve FAISS indeksini kaydeder.")
         model_name = project.get("embedding.model")
         passage_prefix = project.get("embedding.passagePrefix")
         batch_size = int(project.get("embedding.batchSize", 32))
-        vs = project.get("vectorStore")
-        space, m, ef_c, ef_s = vs["space"], vs["M"], vs["efConstruction"], vs["efSearch"]
+        vs_type = project.get("vectorStore.type")
         top_k = project.get("retrieval.topK")
     except (ConfigError, KeyError) as e:
         print(f"Ayar hatası: {e}", file=sys.stderr)
@@ -91,8 +94,8 @@ def main() -> int:
     if reason := stale_chunks_reason(project, chunk_data, chunks_file, model_name):
         print(f"{reason} Önce chunking'i yeniden çalıştır: python rag/chunk.py", file=sys.stderr)
         return 1
-    if ef_s < top_k:
-        print(f"vectorStore.efSearch ({ef_s}) retrieval.topK'dan ({top_k}) küçük olamaz.", file=sys.stderr)
+    if vs_type not in SUPPORTED_TYPES:
+        print(f"vectorStore.type {vs_type!r} desteklenmiyor. Desteklenenler: {SUPPORTED_TYPES}", file=sys.stderr)
         return 1
 
     print(f"Proje: {project.id} | model: {model_name}")
@@ -122,26 +125,23 @@ def main() -> int:
         if n > token_limit:
             errors.append(f"{c['id']}: {n} token > model sınırı {token_limit} (metin kesilirdi).")
 
-    # ---- HNSW indeksi: kur, geçici dosyaya kaydet, diskten geri okuyup recall ölç
+    # ---- FAISS indeksi: kur, geçici dosyaya kaydet, diskten geri okuyup kontrol et
     out_dir = project.index_dir
-    tmp_file = out_dir / (HNSW_FILE + ".tmp")
-    recall = None
+    tmp_file = out_dir / (INDEX_FILE + ".tmp")
+    match = None
     if not errors:
         t0 = time.perf_counter()
-        index = hnswlib.Index(space=space, dim=dim)
-        index.init_index(max_elements=len(vectors), M=m, ef_construction=ef_c, random_seed=HNSW_SEED)
-        index.add_items(vectors, np.arange(len(vectors)))
-        index.save_index(str(tmp_file))
+        index = faiss.IndexFlatIP(dim)
+        index.add(vectors)
+        faiss.write_index(index, str(tmp_file))
         build_sec = time.perf_counter() - t0
 
-        loaded = hnswlib.Index(space=space, dim=dim)
-        loaded.load_index(str(tmp_file))
-        loaded.set_ef(ef_s)
-        if loaded.get_current_count() != len(chunks):
-            errors.append(f"HNSW'de {loaded.get_current_count()} öğe var, beklenen {len(chunks)}.")
-        recall = recall_at_k(loaded, vectors, top_k)
-        if recall < 1.0:
-            errors.append(f"HNSW recall@{top_k} = {recall:.3f} < 1.0 → vectorStore.efSearch'ü artır.")
+        loaded = faiss.read_index(str(tmp_file))
+        if loaded.ntotal != len(chunks):
+            errors.append(f"FAISS'te {loaded.ntotal} vektör var, beklenen {len(chunks)}.")
+        match = search_matches_exact(loaded, vectors, top_k)
+        if match < 1.0:
+            errors.append(f"FAISS ilk {top_k} sonucu kesin aramayla uyuşmuyor ({match:.3f}).")
 
     if errors:
         tmp_file.unlink(missing_ok=True)
@@ -150,7 +150,7 @@ def main() -> int:
             print(f"  - {err}", file=sys.stderr)
         return 2
 
-    tmp_file.replace(out_dir / HNSW_FILE)
+    tmp_file.replace(out_dir / INDEX_FILE)
     output = {
         "schemaVersion": SCHEMA_VERSION,
         "project": project.id,
@@ -163,19 +163,19 @@ def main() -> int:
             "passagePrefix": passage_prefix,
             "queryPrefix": project.get("embedding.queryPrefix"),
         },
-        "vectorStore": {"type": "hnsw", "file": HNSW_FILE, "space": space, "M": m,
-                        "efConstruction": ef_c, "efSearch": ef_s, "seed": HNSW_SEED, "count": len(chunks)},
+        "vectorStore": {"type": vs_type, "library": "faiss", "index": "IndexFlatIP", "metric": "inner_product",
+                        "file": INDEX_FILE, "count": len(chunks)},
         "chunking": chunk_data["chunking"],
-        "chunks": chunks,  # sıra önemli: HNSW etiketi i → chunks[i]
+        "chunks": chunks,  # sıra önemli: FAISS vektörü i → chunks[i]
     }
     (out_dir / "index.json").write_text(json.dumps(output, ensure_ascii=False, indent=1), encoding="utf-8")
 
     print("\nDoğrulama: tamam")
     print(f"  Vektör sayısı = chunk sayısı: {len(vectors)}, boyut {dim}, normalize")
     print(f"  Önekli token (özel tokenlar dahil): en fazla {max(token_counts)} / {token_limit}")
-    print(f"  HNSW (M={m}, efConstruction={ef_c}, efSearch={ef_s}) kuruldu: {build_sec * 1000:.0f} ms")
-    print(f"  HNSW recall@{top_k} (kesin aramaya göre, {len(chunks)} sorgu): {recall:.3f}")
-    for name in (HNSW_FILE, "index.json"):
+    print(f"  FAISS IndexFlatIP kuruldu: {build_sec * 1000:.1f} ms")
+    print(f"  Diskten okunan indeks, ilk {top_k} sonuçta kesin aramayla uyumlu ({len(chunks)} sorgu): {match:.3f}")
+    for name in (INDEX_FILE, "index.json"):
         f = out_dir / name
         print(f"→ {f.relative_to(ROOT)} ({f.stat().st_size / 1e6:.2f} MB)")
     return 0

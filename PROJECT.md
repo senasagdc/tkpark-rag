@@ -28,7 +28,21 @@
 - Sonuç: 186 chunk 16.6 sn'de embed edildi (CPU). En fazla 302/512 token. HNSW 54 ms'de kuruldu. Diskten okunan indeksin recall@5 değeri kesin aramaya göre **1.000** (186 sorgu). Dosyalar: `hnsw.bin` 0.60 MB, `index.json` 0.26 MB. Tepe RAM ~745 MB.
 - Hızlı kontrol (HNSW, ilk 5): "Firma kabul şartları…" → 10.1 artık 3. sırada (small ile ilk 3'te yoktu). "Ortak alanlar…" → 7.1.7 ilk 2'de. "Kira ödemesi gecikirse…" → 7.2.1 ilk 4'te. Puanlar hâlâ birbirine çok yakın (0.80–0.83).
 
-**Sıradaki: 1.5 Retrieval testi** → `rag/search.py` (HNSW'den okur) + 10 soruluk deney (doğru bölüm ilk 5'te mi?), ardından `topK` / `minScore`.
+**24.11.2026 — Karar: HNSW yerine FAISS flat (kesin arama).**
+- Ölçümler (Apple M2, 186 vektör, 20 gerçek soru):
+  | | HNSW (hnswlib, M=16, efSearch=50) | FAISS `IndexFlatIP` |
+  |---|---|---|
+  | Recall@1/5/10 | 1.0 / 1.0 / 1.0 (efSearch=10'da @5 0.94) | 1.0 (tanımı gereği) |
+  | Latency p50 (tek soru, 1 thread) | 208 µs | **22 µs** |
+  | QPS (tek tek, 1 thread) | ~4.800 | **~44.700** |
+  | Dosya | 0.60 MB | 0.57 MB (yalnızca vektörler) |
+  | Build | ~55 ms | ~0.02 ms |
+  | Ayar | M, efConstruction, efSearch | yok |
+- Sonuç: bu boyutta kesin arama daha hızlı, ayarsız ve hiçbir sonucu kaçırmıyor. HNSW'nin avantajı on binlerce vektörden sonra başlar; o zaman `faiss.IndexHNSWFlat(dim, 16)` ile aynı kütüphanede geçilir.
+- Uçtan uca darboğaz arama değil, soru embedding'i (~15 ms) → ~67 sorgu/sn.
+- HNSW sırasında bulunan not: `hnswlib` çok thread'le eklemede seed'e rağmen her kurulumda farklı graf üretiyordu (tek thread'de aynı). FAISS flat'te bu sorun yok, indeks deterministik.
+
+**Sıradaki: 1.5 Retrieval testi** → `rag/search.py` (FAISS'ten okur) + 10 soruluk deney (doğru bölüm ilk 5'te mi?), ardından `topK` / `minScore`.
 
 **17.11.2026 — Embedding kararı:** Deneysel aşamada kapsam küçük tutulacak. Embedding için yerel **`intfloat/multilingual-e5-small`** kullanılacak (adaptör: `e5`). API anahtarı ve kota gerekmez, aynı girdi her zaman aynı vektörü verir. Gemini embedding adaptörü sonra eklenebilir; geçiş `project.json`'da tek satır değişikliktir. Bugünün hedefi: **Document Processing + Embedding Pipeline** (temizlik → yapı tespiti → chunking → embedding → kaydet ve doğrula).
 
@@ -50,13 +64,13 @@ Sistem iki parçadan oluşur:
 
 ## Mimari kararı (16.11.2026, 17.11'de genelleştirildi)
 - **Python (`rag/`)**: Offline işler: belge okuma, chunking, embedding, indeks oluşturma,
-  retrieval denemeleri, değerlendirme. Çıktısı: `index/<proje-id>/index.json` + `hnsw.bin`.
+  retrieval denemeleri, değerlendirme. Çıktısı: `index/<proje-id>/index.json` + `faiss.index`.
 - **Node.js + Express (`src/`, Part 2)**: Çalışan web uygulaması. Aktif projenin `index.json`'ını okur,
   soruyu embed eder, retrieval + LLM çağrısı yapar, arayüzü sunar.
 - Uygulama çalışırken **tek sunucu** (Node) var; Python yalnızca indeks üretirken çalışır.
 - İki taraf arasındaki sözleşmeler:
   - **`projects/<proje-id>/project.json`** → iki taraf da aynı ayar dosyasını okur. Ek bağımlılık gerekmesin diye YAML değil JSON (Python `json`, Node `JSON.parse`).
-  - **`index/<proje-id>/index.json` + `hnsw.bin`** → embedding modeli, önekler ve HNSW ayarları `index.json`'a yazılır, vektörler `hnsw.bin`'de (Node tarafı `hnswlib-node` ile okur). Node açılışta `project.json` ile `index.json`'daki embedding ayarlarını karşılaştırır. Uyuşmazsa **başlamaz** ve "indeksi yeniden oluştur" hatası verir (farklı modelle embed edilmiş soru ve parçalar karşılaştırılamaz).
+  - **`index/<proje-id>/index.json` + `faiss.index`** → embedding modeli, önekler ve vektör deposu ayarları `index.json`'a yazılır, vektörler `faiss.index`'te (Node tarafında okuma yöntemi Part 2'de seçilecek). Node açılışta `project.json` ile `index.json`'daki embedding ayarlarını karşılaştırır. Uyuşmazsa **başlamaz** ve "indeksi yeniden oluştur" hatası verir (farklı modelle embed edilmiş soru ve parçalar karşılaştırılamaz).
 
 ## Klasör yapısı (hedef)
 ```
@@ -75,7 +89,7 @@ tkpark-ragagent/
 │   ├── config.py                  # PROJECT seç → project.json + .env oku, doğrula
 │   ├── extract.py                 # kaynak → index/<id>/pages.json
 │   ├── chunk.py                   # (1.3) → index/<id>/chunks.json
-│   ├── embed.py                   # (1.4) → index/<id>/index.json + hnsw.bin
+│   ├── embed.py                   # (1.4) → index/<id>/index.json + faiss.index
 │   ├── search.py                  # (1.5) retrieval testi
 │   ├── loaders/                   # pdf.py (PyMuPDF) — ileride docx.py, html.py…
 ├── src/                           # Node çekirdek — projeden bağımsız (Part 2)
@@ -127,7 +141,7 @@ tkpark-ragagent/
     "passagePrefix": "passage: ",
     "queryPrefix": "query: "
   },
-  "vectorStore": { "type": "hnsw", "space": "cosine", "M": 16, "efConstruction": 200, "efSearch": 50 },
+  "vectorStore": { "type": "flat" },
   "llm":       { "provider": "gemini", "model": "gemini-3.5-flash-lite", "temperature": 0.1 },
   "retrieval": { "topK": 5, "minScore": 0.0 },
 
@@ -151,7 +165,7 @@ tkpark-ragagent/
 - `minScore` 1.5'teki retrieval testinden sonra ayarlanacak (Part 4'te konu dışı guardrail'i de bunu kullanacak).
 - Başlığı olmayan bir belgede `strategy: "fixed"` kullanılır; `heading` stratejisi hiçbir başlık bulamazsa `fallback`'e düşülür.
 
-## `index.json` + `hnsw.bin` sözleşmesi
+## `index.json` + `faiss.index` sözleşmesi
 ```json
 {
   "schemaVersion": 2,
@@ -159,8 +173,8 @@ tkpark-ragagent/
   "createdAt": "2026-11-24T09:05:00Z",
   "embedding": { "model": "intfloat/multilingual-e5-base", "dimensions": 768, "normalized": true,
                  "passagePrefix": "passage: ", "queryPrefix": "query: " },
-  "vectorStore": { "type": "hnsw", "file": "hnsw.bin", "space": "cosine", "M": 16,
-                   "efConstruction": 200, "efSearch": 50, "seed": 100, "count": 186 },
+  "vectorStore": { "type": "flat", "library": "faiss", "index": "IndexFlatIP",
+                   "metric": "inner_product", "file": "faiss.index", "count": 186 },
   "chunking": { "…": "chunks.json'daki ayarlar" },
   "chunks": [
     {
@@ -172,21 +186,16 @@ tkpark-ragagent/
   ]
 }
 ```
-- Vektörler `index.json`'da değil, `hnsw.bin`'de. HNSW etiketi `i` → `chunks[i]`, yani `chunks` sırası değiştirilmemeli.
-- `dimensions` modelin döndürdüğü gerçek boyuttan yazılır (`multilingual-e5-base` için 768). Vektörler normalize. `space=cosine` olduğu için hnswlib mesafeyi `1 − cosine` olarak döndürür.
+- Vektörler `index.json`'da değil, `faiss.index`'te. FAISS vektörü `i` → `chunks[i]`, yani `chunks` sırası değiştirilmemeli.
+- `dimensions` modelin döndürdüğü gerçek boyuttan yazılır (`multilingual-e5-base` için 768). Vektörler normalize olduğu için `IndexFlatIP`'nin döndürdüğü iç çarpım doğrudan cosine benzerliğidir (1 = aynı yön).
 - `metadata` alanları kaynak türüne göre değişebilir; yalnızca `source` alanı zorunlu.
 
 ## Embedding ve vektör deposu
 - **Model:** `intfloat/multilingual-e5-base`, `sentence-transformers` ile yerelde, `normalize_embeddings=True`. Düz `e5-base` değil, **multilingual** sürüm olmalı (düz sürüm İngilizce için eğitildi).
 - **Önekler:** chunk'lar `passage: `, sorular `query: ` ile embed edilir (`project.json › embedding`). Önekler olmadan kalite belirgin düşer.
 - **Giriş sınırı 512 token**, aşan metin kesilir. `chunking.maxTokens` bu yüzden 300 tutulur; `embed.py` önekli gerçek girişi ayrıca kontrol eder.
-- **HNSW (`hnswlib`):**
-  - `M=16`: düğüm başına komşu sayısı (standart değer).
-  - `efConstruction=200`: kurulumda aday listesi; yüksek değer daha iyi graf demek.
-  - `efSearch=50`: arama sırasında aday listesi; `topK`'dan küçük olamaz.
-  - `seed=100`: her çalıştırmada aynı graf oluşur.
-  - 186 chunk için kesin arama da yeterliydi; HNSW büyüyen belge sayısı için seçildi. `embed.py` her kurulumda recall@topK değerini kesin aramaya göre ölçer, 1.0'ın altındaysa dosya yazmaz (`efSearch` artırılmalı).
-- **Node (Part 2):** sorgu embedding'i `@huggingface/transformers` + `Xenova/multilingual-e5-base` (ONNX) ile, arama `hnswlib-node` ile `hnsw.bin` okunarak yapılır. Python ve Node aynı soru için aynı vektörü üretmeli; Part 2'de bir kez karşılaştırılır.
+- **Vektör deposu: FAISS `IndexFlatIP` (flat, kesin arama).** Soru bütün vektörlerle karşılaştırılır; ayar yok, recall her zaman 1.0. `embed.py`, diskten okunan indeksin ilk `topK` sonucunu numpy ile kesin aramayla karşılaştırır; uyuşmazsa dosya yazmaz. Vektör sayısı on binleri geçerse `faiss.IndexHNSWFlat(dim, 16)`'ya geçilir (HNSW ölçümleri yukarıda, 24.11 notunda).
+- **Node (Part 2):** sorgu embedding'i `@huggingface/transformers` + `Xenova/multilingual-e5-base` (ONNX) ile, arama için `faiss-node` veya vektörleri okuyup dot product almak seçenekleri Part 2'de değerlendirilecek. Python ve Node aynı soru için aynı vektörü üretmeli; Part 2'de bir kez karşılaştırılır.
 - Kalite yetmezse `intfloat/multilingual-e5-large` denenir (tek satır değişiklik + `chunk.py` ve `embed.py` yeniden).
 
 ## Yeni proje ekleme (kontrol listesi)
@@ -230,9 +239,9 @@ tkpark-ragagent/
     - Text cleaning: PDF satır sonlarını birleştir, boş satır ve fazla boşlukları temizle
     - Structure detection: `headingPatterns` ile başlık hiyerarşisi (`section`, `title`)
     - Chunking: bölüm bazlı, `maxTokens` aşılırsa `bullet` sınırlarından böl
-  - [x] 1.4 Embeddings (`multilingual-e5-base` + HNSW, 24.11'de small'dan geçildi) → `index/<id>/index.json` + `hnsw.bin`
+  - [x] 1.4 Embeddings (`multilingual-e5-base` + FAISS flat, 24.11'de small'dan geçildi) → `index/<id>/index.json` + `faiss.index`
     - [x] Hazırlık: `project.json` e5'e geçti, `sentence-transformers` kuruldu, model indirildi ve test edildi
-    - [x] Save & validate: vektör sayısı = chunk sayısı, tüm vektörler 768 boyutlu ve normalize, HNSW recall@5 = 1.0, önekle birlikte hiçbir chunk 512 tokeni aşmıyor
+    - [x] Save & validate: vektör sayısı = chunk sayısı, tüm vektörler 768 boyutlu ve normalize, FAISS sonuçları kesin aramayla aynı, önekle birlikte hiçbir chunk 512 tokeni aşmıyor
     - **Deney başarı ölçütü (1.5'te):** 10 soruda doğru bölüm `search.py` ile ilk 5 sonuçta geliyor
   - [ ] 1.5 Retrieval testi (LLM yok) → `minScore`/`topK` belirlenir
   - [ ] 1.6 LLM + backend'de üretilen kaynaklar (prompt `prompts/system.md`'den)
@@ -253,11 +262,11 @@ Bunlar varsayılanlardır. Sağlayıcı ve model `project.json`'dan seçildiği 
 | Embedding | Yerel `intfloat/multilingual-e5-base`, 768 boyut (`sentence-transformers`, adaptör yok) |
 | LLM | Gemini `gemini-3.5-flash-lite` (adaptör: `gemini`) |
 | SDK | Embedding: Python `sentence-transformers`, Node `@huggingface/transformers`. LLM: Python `google-genai`, Node `@google/genai` (yalnızca adaptör dosyalarında) |
-| Vector store | HNSW (`hnswlib`, cosine, M=16, efConstruction=200, efSearch=50); metin/metadata `index.json`'da |
+| Vector store | FAISS `IndexFlatIP` (`faiss-cpu`, kesin arama, iç çarpım = cosine); metin/metadata `index.json`'da. Büyürse `IndexHNSWFlat` |
 | Proje ayarları | `projects/<id>/project.json` (Python ve Node ortak) |
 | Web (Part 2–3) | Node.js 22+, Express 5, HTML/CSS/vanilla JS |
 
-Not: HNSW tek dosyalık yerel bir indeks. Çok büyük veya sık güncellenen projelerde Qdrant, Chroma ya da pgvector gibi bir sunucu tabanlı veritabanına geçilebilir; bu değişiklik Node tarafında yalnızca `retrieval.js`'i etkiler.
+Not: FAISS tek dosyalık yerel bir indeks. Çok büyük veya sık güncellenen projelerde Qdrant, Chroma ya da pgvector gibi bir sunucu tabanlı veritabanına geçilebilir; bu değişiklik Node tarafında yalnızca `retrieval.js`'i etkiler.
 
 ## Dosyalar
 - `.env.example` — ortam değişkenleri şablonu (`PORT`, `PROJECT`, `GEMINI_API_KEY`); `.env` git'e girmez
@@ -269,8 +278,8 @@ Not: HNSW tek dosyalık yerel bir indeks. Çok büyük veya sık güncellenen pr
 - `rag/extract.py` — tüm `sources` → `index/<id>/pages.json`
   (`schemaVersion`, `project`, `createdAt`, `sources[]` meta, `pages[]` = `{source, page, text}`; `page` = PDF sayfa sırası)
 - `rag/chunk.py` — `pages.json` → `index/<id>/chunks.json` (`chunks[]` = `{id, text, tokens, metadata: {source, section, title, path, pages}}`; `id` = `<proje>-<bölüm>-<sıra>`, `pages` = kaynak sayfa sırası). Satır birleştirme, başlık tespiti, bölüm içi bölme; sınırı aşan chunk varsa hata koduyla çıkar.
-- `rag/embed.py` — `chunks.json` → `SentenceTransformer` ile embedding → HNSW → `index/<id>/hnsw.bin` + `index.json` (`schemaVersion` 2: `embedding`, `vectorStore`, `chunking`, `chunks[]` = `{id, text, tokens, metadata}`). Kontroller: chunks.json güncel mi, token ≤ 512, sayı/NaN/norm, diskten okunan HNSW'de recall@topK = 1.0. Başarısızsa çıkış kodu 2 ve hiçbir dosya yazılmaz; `chunks.json` eskiyse çıkış kodu 1. İsteğe bağlı `embedding.batchSize` (varsayılan 32).
-- `requirements.txt` — `pymupdf`, `sentence-transformers` (PyTorch ile birlikte gelir), `langchain-text-splitters`, `hnswlib`. `multilingual-e5-base` modeli (~1.1 GB) ilk kullanımda Hugging Face'ten bir kez indirilir ve yerel önbellekte tutulur.
+- `rag/embed.py` — `chunks.json` → `SentenceTransformer` ile embedding → FAISS `IndexFlatIP` → `index/<id>/faiss.index` + `index.json` (`schemaVersion` 2: `embedding`, `vectorStore`, `chunking`, `chunks[]` = `{id, text, tokens, metadata}`). Kontroller: chunks.json güncel mi, token ≤ 512, sayı/NaN/norm, diskten okunan FAISS indeksinin sonuçları kesin aramayla aynı. Başarısızsa çıkış kodu 2 ve hiçbir dosya yazılmaz; `chunks.json` eskiyse çıkış kodu 1. İsteğe bağlı `embedding.batchSize` (varsayılan 32).
+- `requirements.txt` — `pymupdf`, `sentence-transformers` (PyTorch ile birlikte gelir), `langchain-text-splitters`, `faiss-cpu`. `multilingual-e5-base` modeli (~1.1 GB) ilk kullanımda Hugging Face'ten bir kez indirilir ve yerel önbellekte tutulur.
 - `package.json` — Node tarafı (Part 2'de doldurulacak)
 
 ## Nasıl çalıştırılır
@@ -299,5 +308,5 @@ Beklenen: `Sayfa sayısı: 41`, `Atlanan sayfalar: [1, 2, 3, 4]`, `Alınan sayfa
 
 ## Sonraki adım (bugünün hedefi: Document Processing + Embedding Pipeline)
 1. ~~1.3 Chunking~~ ✓
-2. ~~1.4 Embedding~~ ✓ (24.11: e5-base + HNSW)
+2. ~~1.4 Embedding~~ ✓ (24.11: e5-base + FAISS flat)
 3. Hızlı deney (1.5): 10 soruyla `search.py`; doğru bölüm ilk 5'te değilse önce chunking'e, sonra modele bakılır.

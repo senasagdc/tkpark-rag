@@ -31,7 +31,7 @@
     "passagePrefix": "passage: ",
     "queryPrefix": "query: "
   },
-  "vectorStore": { "type": "hnsw", "space": "cosine", "M": 16, "efConstruction": 200, "efSearch": 50 },
+  "vectorStore": { "type": "flat" },
   "llm":       { "provider": "gemini", "model": "gemini-3.5-flash-lite", "temperature": 0.1 },
   "retrieval": { "topK": 5, "minScore": 0.0 },
 
