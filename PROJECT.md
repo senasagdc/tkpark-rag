@@ -21,7 +21,14 @@
 - **17.11.2026 düzeltme:** `index.json › embedding`'e yalnızca vektörü belirleyen alanlar yazılır (`provider`, `model`, `dimensions`, `normalized`); `batchSize` gibi çalışma ayarları yazılmaz → Node yalnızca `provider` + `model`'i karşılaştırır. `embed.py` ayrıca eski `chunks.json`'ı yakalar: `project.json › chunking` ile `chunks.json`'daki ayarlar farklıysa ya da `pages.json` daha yeniyse durur ve `chunk.py`'yi önerir. Dört senaryo test edildi (maxTokens, headingPatterns, batchSize, yeni pages.json); indeks yeniden üretildi.
 - İlk hızlı kontrol: "Ortak alanlar nasıl kullanılır?" → 7.1.7 (ilk 3'ün hepsi), "Kira ödemesi gecikirse…" → 7.2.1. "Firma kabul şartları nelerdir?" → ilk 3'te 7.1.5 / 7.2.1 / 7.1.6; beklenen 10.1 (Aday Girişimci Başvuru…) ilk 3'te değil. Puanlar 0.84–0.86 aralığında, birbirine çok yakın → 1.5'te incelenecek.
 
-**Sıradaki: 1.5 Retrieval testi** → `rag/search.py` + 10 soruluk deney (doğru bölüm ilk 5'te mi?), ardından `topK` / `minScore`.
+**24.11.2026 — Karar: adaptör yok, `e5-base`, HNSW.**
+- Embedding adaptör katmanı (`rag/providers/`) kaldırıldı. `embed.py` normal bir RAG gibi doğrudan `SentenceTransformer(embedding.model)` çağırıyor. Model adı ve önekler (`passagePrefix`, `queryPrefix`) `project.json`'dan okunuyor. Metin çıkarma (PyMuPDF) ve chunking (RecursiveCharacterTextSplitter, 300/50) değişmedi.
+- Model `intfloat/multilingual-e5-small` → **`intfloat/multilingual-e5-base`** oldu (768 boyut, 512 token sınırı, ~1.1 GB). Tokenizer aynı (XLM-R), bu yüzden `chunk.py` yeniden çalıştırıldığında 186 chunk metin, metadata ve token sayısıyla birebir aynı çıktı.
+- Vektör deposu artık **HNSW** (`hnswlib` 0.8): `space=cosine`, `M=16`, `efConstruction=200`, `efSearch=50`, `seed=100`. Vektörler `index/<id>/hnsw.bin` dosyasında, metin ve metadata `index.json`'da. HNSW etiketi `i` = `chunks[i]`.
+- Sonuç: 186 chunk 16.6 sn'de embed edildi (CPU). En fazla 302/512 token. HNSW 54 ms'de kuruldu. Diskten okunan indeksin recall@5 değeri kesin aramaya göre **1.000** (186 sorgu). Dosyalar: `hnsw.bin` 0.60 MB, `index.json` 0.26 MB. Tepe RAM ~745 MB.
+- Hızlı kontrol (HNSW, ilk 5): "Firma kabul şartları…" → 10.1 artık 3. sırada (small ile ilk 3'te yoktu). "Ortak alanlar…" → 7.1.7 ilk 2'de. "Kira ödemesi gecikirse…" → 7.2.1 ilk 4'te. Puanlar hâlâ birbirine çok yakın (0.80–0.83).
+
+**Sıradaki: 1.5 Retrieval testi** → `rag/search.py` (HNSW'den okur) + 10 soruluk deney (doğru bölüm ilk 5'te mi?), ardından `topK` / `minScore`.
 
 **17.11.2026 — Embedding kararı:** Deneysel aşamada kapsam küçük tutulacak. Embedding için yerel **`intfloat/multilingual-e5-small`** kullanılacak (adaptör: `e5`). API anahtarı ve kota gerekmez, aynı girdi her zaman aynı vektörü verir. Gemini embedding adaptörü sonra eklenebilir; geçiş `project.json`'da tek satır değişikliktir. Bugünün hedefi: **Document Processing + Embedding Pipeline** (temizlik → yapı tespiti → chunking → embedding → kaydet ve doğrula).
 
@@ -38,18 +45,18 @@ Sistem iki parçadan oluşur:
 **Kurallar**
 1. Çekirdek kodda belgeye özel hiçbir şey olmaz: dosya adı, sayfa numarası, başlık kalıbı, prompt, "Teknopark" kelimesi, model adı, eşik değeri. Bunların hepsi `project.json` veya proje klasöründen okunur.
 2. Aktif proje tek bir değişkenle seçilir: `.env` içinde `PROJECT=yonerge` (veya `--project yonerge` argümanı).
-3. Sağlayıcılar (Gemini vb.) bir **adaptör** arkasındadır. Model ya da sağlayıcı değişirse `project.json`'da tek satır değişir.
+3. Model adları ve parametreler `project.json`'dan okunur. Embedding için ayrı bir adaptör katmanı yok (24.11.2026 kararı): kod doğrudan `sentence-transformers` kullanır, model değişirse `project.json`'da tek satır değişir.
 4. **Kabul kriteri:** Yeni bir proje eklerken `rag/`, `src/` veya `public/` altında kod değişikliği gerekiyorsa bu bir tasarım hatası sayılır ve çekirdek genelleştirilir.
 
 ## Mimari kararı (16.11.2026, 17.11'de genelleştirildi)
 - **Python (`rag/`)**: Offline işler: belge okuma, chunking, embedding, indeks oluşturma,
-  retrieval denemeleri, değerlendirme. Çıktısı: `index/<proje-id>/index.json`.
+  retrieval denemeleri, değerlendirme. Çıktısı: `index/<proje-id>/index.json` + `hnsw.bin`.
 - **Node.js + Express (`src/`, Part 2)**: Çalışan web uygulaması. Aktif projenin `index.json`'ını okur,
   soruyu embed eder, retrieval + LLM çağrısı yapar, arayüzü sunar.
 - Uygulama çalışırken **tek sunucu** (Node) var; Python yalnızca indeks üretirken çalışır.
 - İki taraf arasındaki sözleşmeler:
   - **`projects/<proje-id>/project.json`** → iki taraf da aynı ayar dosyasını okur. Ek bağımlılık gerekmesin diye YAML değil JSON (Python `json`, Node `JSON.parse`).
-  - **`index/<proje-id>/index.json`** → embedding sağlayıcısı, modeli ve ayarları bu dosyaya da yazılır. Node açılışta `project.json` ile `index.json`'daki embedding ayarlarını karşılaştırır. Uyuşmazsa **başlamaz** ve "indeksi yeniden oluştur" hatası verir (farklı modelle embed edilmiş soru ve parçalar karşılaştırılamaz).
+  - **`index/<proje-id>/index.json` + `hnsw.bin`** → embedding modeli, önekler ve HNSW ayarları `index.json`'a yazılır, vektörler `hnsw.bin`'de (Node tarafı `hnswlib-node` ile okur). Node açılışta `project.json` ile `index.json`'daki embedding ayarlarını karşılaştırır. Uyuşmazsa **başlamaz** ve "indeksi yeniden oluştur" hatası verir (farklı modelle embed edilmiş soru ve parçalar karşılaştırılamaz).
 
 ## Klasör yapısı (hedef)
 ```
@@ -68,10 +75,9 @@ tkpark-ragagent/
 │   ├── config.py                  # PROJECT seç → project.json + .env oku, doğrula
 │   ├── extract.py                 # kaynak → index/<id>/pages.json
 │   ├── chunk.py                   # (1.3) → index/<id>/chunks.json
-│   ├── embed.py                   # (1.4) → index/<id>/index.json
+│   ├── embed.py                   # (1.4) → index/<id>/index.json + hnsw.bin
 │   ├── search.py                  # (1.5) retrieval testi
 │   ├── loaders/                   # pdf.py (PyMuPDF) — ileride docx.py, html.py…
-│   └── providers/                 # embedding adaptörleri: gemini.py …
 ├── src/                           # Node çekirdek — projeden bağımsız (Part 2)
 │   ├── server.js
 │   ├── config.js                  # aynı project.json'ı okur
@@ -116,7 +122,12 @@ tkpark-ragagent/
     "fallback": { "strategy": "fixed", "maxTokens": 300, "overlap": 50 }
   },
 
-  "embedding": { "provider": "e5", "model": "intfloat/multilingual-e5-small" },
+  "embedding": {
+    "model": "intfloat/multilingual-e5-base",
+    "passagePrefix": "passage: ",
+    "queryPrefix": "query: "
+  },
+  "vectorStore": { "type": "hnsw", "space": "cosine", "M": 16, "efConstruction": 200, "efSearch": 50 },
   "llm":       { "provider": "gemini", "model": "gemini-3.5-flash-lite", "temperature": 0.1 },
   "retrieval": { "topK": 5, "minScore": 0.0 },
 
@@ -140,43 +151,43 @@ tkpark-ragagent/
 - `minScore` 1.5'teki retrieval testinden sonra ayarlanacak (Part 4'te konu dışı guardrail'i de bunu kullanacak).
 - Başlığı olmayan bir belgede `strategy: "fixed"` kullanılır; `heading` stratejisi hiçbir başlık bulamazsa `fallback`'e düşülür.
 
-## `index.json` sözleşmesi
+## `index.json` + `hnsw.bin` sözleşmesi
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "project": "yonerge",
-  "createdAt": "2026-11-18T10:00:00Z",
-  "embedding": { "provider": "e5", "model": "intfloat/multilingual-e5-small", "dimensions": 384, "normalized": true },
+  "createdAt": "2026-11-24T09:05:00Z",
+  "embedding": { "model": "intfloat/multilingual-e5-base", "dimensions": 768, "normalized": true,
+                 "passagePrefix": "passage: ", "queryPrefix": "query: " },
+  "vectorStore": { "type": "hnsw", "file": "hnsw.bin", "space": "cosine", "M": 16,
+                   "efConstruction": 200, "efSearch": 50, "seed": 100, "count": 186 },
+  "chunking": { "…": "chunks.json'daki ayarlar" },
   "chunks": [
     {
       "id": "yonerge-7.1.5-0",
       "text": "…",
-      "vector": [0.012, -0.044, …],
+      "tokens": 227,
       "metadata": { "source": "data/yonerge.pdf", "section": "7.1.5", "title": "…", "path": ["7. …", "7.1. …", "7.1.5. …"], "pages": [13, 14] }
     }
   ]
 }
 ```
-`dimensions` değeri, 1.4'te modelin döndürdüğü gerçek boyuttan yazılır (`multilingual-e5-small` için 384). Vektörler normalize edildiği için cosine benzerliği dot product'a eşittir. `metadata` alanları kaynak türüne göre değişebilir; çekirdek yalnızca `source` alanını zorunlu tutar.
+- Vektörler `index.json`'da değil, `hnsw.bin`'de. HNSW etiketi `i` → `chunks[i]`, yani `chunks` sırası değiştirilmemeli.
+- `dimensions` modelin döndürdüğü gerçek boyuttan yazılır (`multilingual-e5-base` için 768). Vektörler normalize. `space=cosine` olduğu için hnswlib mesafeyi `1 − cosine` olarak döndürür.
+- `metadata` alanları kaynak türüne göre değişebilir; yalnızca `source` alanı zorunlu.
 
-## Sağlayıcı adaptörleri
-Her iki tarafta da çekirdek yalnızca şu küçük arayüzleri çağırır:
-
-| Arayüz | Python (`rag/providers/`) | Node (`src/providers/`) |
-|---|---|---|
-| Embedding | `embed(texts: list[str], kind: "document" \| "query") -> list[list[float]]` | `embed(texts, kind) → Promise<number[][]>` |
-| LLM | — (Python'da LLM yalnızca değerlendirmede) | `generate(messages, opts) → Promise<string>`, ileride `stream(...)` |
-
-Seçim `project.json` → `"provider": "e5"` ile yapılır. Yeni bir sağlayıcı eklemek = yeni bir adaptör dosyası + kayıt satırı. `kind`, çekirdeğin sağlayıcıdan bağımsız olarak "parça mı, soru mu" bilgisini iletmesidir. Sağlayıcıya özel karşılığı yalnızca adaptörün içinde kalır.
-
-**`e5` adaptörü (`intfloat/multilingual-e5-small`)**
-- Python: `rag/providers/e5.py`, `sentence-transformers` ile yerelde, `normalize_embeddings=True`.
-- Node (Part 2): `src/providers/embedding/e5.js`, `@huggingface/transformers` (transformers.js) + `Xenova/multilingual-e5-small` (ONNX). Böylece çalışma anında tek sunucu (Node) kararı korunur.
-- Önekler: `kind="document"` → `"passage: "`, `kind="query"` → `"query: "`. Önekler olmadan kalite belirgin düşer.
-- Model düz `e5-small` değil, **multilingual** sürüm olmalı (düz sürüm İngilizce için eğitildi).
-- Giriş sınırı 512 token; aşan metin kesilir. Bu yüzden `chunking.maxTokens` 300 tutulur ve 1.4'te önekli token sayısı doğrulanır.
-- Python ve Node aynı soru için aynı vektörü üretmeli; Part 2'de bir kez karşılaştırılır.
-- Kalite yetmezse sırasıyla `intfloat/multilingual-e5-base` / `-large` veya `gemini` adaptörü denenir (tek satır değişiklik + indeksi yeniden oluşturma).
+## Embedding ve vektör deposu
+- **Model:** `intfloat/multilingual-e5-base`, `sentence-transformers` ile yerelde, `normalize_embeddings=True`. Düz `e5-base` değil, **multilingual** sürüm olmalı (düz sürüm İngilizce için eğitildi).
+- **Önekler:** chunk'lar `passage: `, sorular `query: ` ile embed edilir (`project.json › embedding`). Önekler olmadan kalite belirgin düşer.
+- **Giriş sınırı 512 token**, aşan metin kesilir. `chunking.maxTokens` bu yüzden 300 tutulur; `embed.py` önekli gerçek girişi ayrıca kontrol eder.
+- **HNSW (`hnswlib`):**
+  - `M=16`: düğüm başına komşu sayısı (standart değer).
+  - `efConstruction=200`: kurulumda aday listesi; yüksek değer daha iyi graf demek.
+  - `efSearch=50`: arama sırasında aday listesi; `topK`'dan küçük olamaz.
+  - `seed=100`: her çalıştırmada aynı graf oluşur.
+  - 186 chunk için kesin arama da yeterliydi; HNSW büyüyen belge sayısı için seçildi. `embed.py` her kurulumda recall@topK değerini kesin aramaya göre ölçer, 1.0'ın altındaysa dosya yazmaz (`efSearch` artırılmalı).
+- **Node (Part 2):** sorgu embedding'i `@huggingface/transformers` + `Xenova/multilingual-e5-base` (ONNX) ile, arama `hnswlib-node` ile `hnsw.bin` okunarak yapılır. Python ve Node aynı soru için aynı vektörü üretmeli; Part 2'de bir kez karşılaştırılır.
+- Kalite yetmezse `intfloat/multilingual-e5-large` denenir (tek satır değişiklik + `chunk.py` ve `embed.py` yeniden).
 
 ## Yeni proje ekleme (kontrol listesi)
 1. `projects/_template/` → `projects/<yeni-id>/` olarak kopyala
@@ -219,9 +230,9 @@ Seçim `project.json` → `"provider": "e5"` ile yapılır. Yeni bir sağlayıc�
     - Text cleaning: PDF satır sonlarını birleştir, boş satır ve fazla boşlukları temizle
     - Structure detection: `headingPatterns` ile başlık hiyerarşisi (`section`, `title`)
     - Chunking: bölüm bazlı, `maxTokens` aşılırsa `bullet` sınırlarından böl
-  - [x] 1.4 Embeddings (`e5` adaptörü, `multilingual-e5-small`) → `index/<id>/index.json`
+  - [x] 1.4 Embeddings (`multilingual-e5-base` + HNSW, 24.11'de small'dan geçildi) → `index/<id>/index.json` + `hnsw.bin`
     - [x] Hazırlık: `project.json` e5'e geçti, `sentence-transformers` kuruldu, model indirildi ve test edildi
-    - [x] Save & validate: vektör sayısı = chunk sayısı, tüm vektörler 384 boyutlu ve normalize, önekle birlikte hiçbir chunk 512 tokeni aşmıyor
+    - [x] Save & validate: vektör sayısı = chunk sayısı, tüm vektörler 768 boyutlu ve normalize, HNSW recall@5 = 1.0, önekle birlikte hiçbir chunk 512 tokeni aşmıyor
     - **Deney başarı ölçütü (1.5'te):** 10 soruda doğru bölüm `search.py` ile ilk 5 sonuçta geliyor
   - [ ] 1.5 Retrieval testi (LLM yok) → `minScore`/`topK` belirlenir
   - [ ] 1.6 LLM + backend'de üretilen kaynaklar (prompt `prompts/system.md`'den)
@@ -239,14 +250,14 @@ Bunlar varsayılanlardır. Sağlayıcı ve model `project.json`'dan seçildiği 
 |---|---|
 | Python | 3.11+ (test: 3.13), sanal ortam `.venv` |
 | PDF extraction | PyMuPDF (`pymupdf`) — `rag/loaders/pdf.py` |
-| Embedding | Yerel `intfloat/multilingual-e5-small`, 384 boyut (adaptör: `e5`). Alternatif: Gemini `gemini-embedding-2` (adaptör: `gemini`) |
+| Embedding | Yerel `intfloat/multilingual-e5-base`, 768 boyut (`sentence-transformers`, adaptör yok) |
 | LLM | Gemini `gemini-3.5-flash-lite` (adaptör: `gemini`) |
 | SDK | Embedding: Python `sentence-transformers`, Node `@huggingface/transformers`. LLM: Python `google-genai`, Node `@google/genai` (yalnızca adaptör dosyalarında) |
-| Vector store | Yerel JSON + cosine similarity (proje başına bir `index.json`) |
+| Vector store | HNSW (`hnswlib`, cosine, M=16, efConstruction=200, efSearch=50); metin/metadata `index.json`'da |
 | Proje ayarları | `projects/<id>/project.json` (Python ve Node ortak) |
 | Web (Part 2–3) | Node.js 22+, Express 5, HTML/CSS/vanilla JS |
 
-Not: Yerel JSON birkaç bin chunk'a kadar yeterli. Daha büyük projelerde vektör DB adaptörü (Chroma, Qdrant, pgvector) eklenebilir. Sözleşme `index.json` olduğu için bu değişiklik Node tarafında yalnızca `retrieval.js`'i etkiler.
+Not: HNSW tek dosyalık yerel bir indeks. Çok büyük veya sık güncellenen projelerde Qdrant, Chroma ya da pgvector gibi bir sunucu tabanlı veritabanına geçilebilir; bu değişiklik Node tarafında yalnızca `retrieval.js`'i etkiler.
 
 ## Dosyalar
 - `.env.example` — ortam değişkenleri şablonu (`PORT`, `PROJECT`, `GEMINI_API_KEY`); `.env` git'e girmez
@@ -258,9 +269,8 @@ Not: Yerel JSON birkaç bin chunk'a kadar yeterli. Daha büyük projelerde vekt�
 - `rag/extract.py` — tüm `sources` → `index/<id>/pages.json`
   (`schemaVersion`, `project`, `createdAt`, `sources[]` meta, `pages[]` = `{source, page, text}`; `page` = PDF sayfa sırası)
 - `rag/chunk.py` — `pages.json` → `index/<id>/chunks.json` (`chunks[]` = `{id, text, tokens, metadata: {source, section, title, path, pages}}`; `id` = `<proje>-<bölüm>-<sıra>`, `pages` = kaynak sayfa sırası). Satır birleştirme, başlık tespiti, bölüm içi bölme; sınırı aşan chunk varsa hata koduyla çıkar.
-- `rag/providers/` — embedding adaptörleri; `get_provider(cfg)` kaydı ve `EmbeddingProvider` arayüzü (`embed`, `count_tokens`, `dimensions`, `normalized`, `token_limit`). `e5.py`: sentence-transformers, önekler, `normalize_embeddings=True`, isteğe bağlı `embedding.batchSize` (varsayılan 32).
-- `rag/embed.py` — `chunks.json` → `index/<id>/index.json` (`schemaVersion`, `project`, `createdAt`, `embedding` = `provider` + `model` + `dimensions` + `normalized`, `chunking`, `chunks[]` = `{id, text, vector, metadata}`; vektörler 7 ondalığa yuvarlanır). Doğrulama başarısızsa çıkış kodu 2, dosya yazılmaz. `chunks.json` eskiyse (chunking ayarları değişmiş ya da `pages.json` daha yeni) çıkış kodu 1.
-- `requirements.txt` — `pymupdf`, `sentence-transformers` (PyTorch ile birlikte gelir), `langchain-text-splitters`. `multilingual-e5-small` modeli (~470 MB) ilk kullanımda Hugging Face'ten bir kez indirilir ve yerel önbellekte tutulur.
+- `rag/embed.py` — `chunks.json` → `SentenceTransformer` ile embedding → HNSW → `index/<id>/hnsw.bin` + `index.json` (`schemaVersion` 2: `embedding`, `vectorStore`, `chunking`, `chunks[]` = `{id, text, tokens, metadata}`). Kontroller: chunks.json güncel mi, token ≤ 512, sayı/NaN/norm, diskten okunan HNSW'de recall@topK = 1.0. Başarısızsa çıkış kodu 2 ve hiçbir dosya yazılmaz; `chunks.json` eskiyse çıkış kodu 1. İsteğe bağlı `embedding.batchSize` (varsayılan 32).
+- `requirements.txt` — `pymupdf`, `sentence-transformers` (PyTorch ile birlikte gelir), `langchain-text-splitters`, `hnswlib`. `multilingual-e5-base` modeli (~1.1 GB) ilk kullanımda Hugging Face'ten bir kez indirilir ve yerel önbellekte tutulur.
 - `package.json` — Node tarafı (Part 2'de doldurulacak)
 
 ## Nasıl çalıştırılır
@@ -289,5 +299,5 @@ Beklenen: `Sayfa sayısı: 41`, `Atlanan sayfalar: [1, 2, 3, 4]`, `Alınan sayfa
 
 ## Sonraki adım (bugünün hedefi: Document Processing + Embedding Pipeline)
 1. ~~1.3 Chunking~~ ✓
-2. ~~1.4 Embedding~~ ✓
+2. ~~1.4 Embedding~~ ✓ (24.11: e5-base + HNSW)
 3. Hızlı deney (1.5): 10 soruyla `search.py`; doğru bölüm ilk 5'te değilse önce chunking'e, sonra modele bakılır.
