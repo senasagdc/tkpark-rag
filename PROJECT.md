@@ -1,52 +1,121 @@
 # PROJECT.md — Yeniden Kullanılabilir RAG Chatbot (ilk proje: Teknopark Yönergesi)
 
-## Durum
-**Part 1 / Adım 1.2 + 1.2b tamamlandı (17.11.2026).** `PROJECT=yonerge python rag/extract.py` → 41 sayfa, s. 1–4 atlandı, 37 sayfa / ~148 bin karakter → `index/yonerge/pages.json`. Türkçe karakterler ve `•` sorunsuz.
+## Durum (24.11.2026)
+Proje 9 adımlık RAG akışına göre ilerliyor. **1–4 ve 6 tamam, 7 (retrieval) bitmek üzere.** Retrieval deneyinde Hit@5 10/10, MRR 0.817. `minScore` 0.0'da kalıyor; konu dışı soruları 5. adımdaki routing yakalayacak. Sırada 5 (query routing), 8 (reranking) ve 9 (prompt) var. Query rewriting ve multi-query, reranking'den sonra ölçüme göre değerlendirilecek.
 
-**17.11.2026 — 1.3 Chunking tamamlandı.** `python rag/chunk.py` → 96 bölüm, 186 chunk, 58–298 token (medyan 227; ~205–1426 karakter), `passage:` öneki ve özel tokenlarla en fazla 302 token (512 sınırının altında), metin kaybı yok → `index/yonerge/chunks.json`.
-- Yöntem: önce numaralı başlığa göre bölme (bölüm sınırı asla aşılmaz), 300 tokenı aşan bölümler kendi içinde LangChain `RecursiveCharacterTextSplitter` ile `•` → satır → cümle sınırlarından bölünür, overlap 50 token (yalnızca aynı bölüm içinde; madde sınırında bölündüğünde örtüşme olmayabilir).
-- Boyut **token** ile ölçülür: splitter'ın `length_function`'ı embedding modelinin tokenizer'ı (`embedding.model`'den okunur, kodda model adı yok). Embedding modeli değişirse chunking de yeniden çalıştırılır. Her chunk'ın başında başlık yolu var: `7. … > 7.1. … > 7.1.5. …`.
-- Hukuki birim = numaralı bölüm. Bu belgede `MADDE N` yapısı yok; metin kendi içinde "6.4. maddesinde" diye bu numaralara atıf yapıyor.
-- PDF'te görülen başlık biçimleri: `7.1.5. Başlık`, numara tek satırda + alt satırda BÜYÜK HARF başlık (`10.1.`), boşluksuz `8.1.BAŞLIK`, alt satıra taşan büyük harfli başlık. `headingPatterns` bunlara göre güncellendi (üstten alta sıralı).
+| # | Adım | Durum | Nerede | Kısaca |
+|---|---|---|---|---|
+| 1 | Metin hazırlığı + metadata | ✅ | `extract.py`, `loaders/pdf.py`, `chunk.py` | PyMuPDF; 37 sayfa; 96 başlık; sayfa/bölüm/başlık metadata'sı |
+| 2 | Chunking | ✅ | `chunk.py` | Başlığa göre bölme + `RecursiveCharacterTextSplitter`; 300 token / 50 overlap; 186 chunk |
+| 3 | Embedding | ✅ | `embed.py` | `multilingual-e5-base`, 768 boyut, `passage:` öneki, normalize |
+| 4 | Vector DB | ✅ | `embed.py` → `faiss.index` | FAISS `IndexFlatIP` (kesin arama) |
+| 5 | Query processing: routing | ⬜ | — | Plan: `geçersiz` kural tabanlı; `belge` / `sohbet` / `konu_dışı` ayrımı LLM ile. Rewriting ve multi-query sonra |
+| 6 | Query embedding | ✅ | `search.py` | Aynı model, `query:` öneki, normalize |
+| 7 | Retrieval | 🔶 | `search.py`, `eval/retrieval.jsonl` | Top-5; Hit@5 10/10, Hit@1 7/10, MRR 0.817; `minScore` 0.0 (karar verildi), commit kaldı |
+| 8 | Reranking | ⬜ | — | Plan: cross-encoder ile ilk ~20 sonucu yeniden sırala |
+| 9 | Prompt oluşturma | ⬜ | — | Plan: `prompts/system.md` + chunk'lar + kaynak bilgisi |
+| → | LLM cevabı, kaynak gösterme, değerlendirme | ⬜ | — | 9'dan sonra (Gemini) |
 
-**17.11.2026 — 1.3 / 1.4 hazırlığı:**
-- Embedding kararı `project.json`'a işlendi: `yonerge` ve `_template` → `e5` / `intfloat/multilingual-e5-small`; chunking boyutu sonra token'a çevrildi (`maxTokens` 300, `overlap` 50).
-- `requirements.txt`'e `sentence-transformers` eklendi ve `.venv`'e kuruldu (sentence-transformers 6.3, torch 2.15, transformers 5.23).
-- Model indirildi ve yerel önbellekte; kısa test: 384 boyut, normalize (norm 1.0), `max_seq_length` 512. Önekli örnekte ilgili cümle 0.867, ilgisiz 0.775 → sıralama doğru, puanlar birbirine yakın (e5'te normal; eşik 1.5'te).
-- `prompts/`, `guardrails/`, `eval/` henüz yok; ilgili adımda (1.6, 1.7, Part 4) oluşturulacak.
+## RAG akışı: adım adım
 
-**17.11.2026 — 1.4 Embedding tamamlandı.** `python rag/embed.py` → 186 chunk, 384 boyut, hepsi normalize, önekli giriş (özel tokenlar dahil) en fazla 302 / 512 token → `index/yonerge/index.json` (1.1 MB, ~4 sn, CPU).
-- `rag/providers/`: `get_provider(embedding_cfg)` kaydı + `e5.py` adaptörü (`passage:` / `query:` önekleri yalnızca adaptörde). Boyut ve token sınırı modelden okunur, kodda sabit yok.
-- `embed.py` kaydetmeden önce doğrular (sayı, boyut, NaN, norm, token sınırı, chunks.json'un aynı tokenizer'la üretilmesi); hata varsa `index.json` yazılmaz.
-- **17.11.2026 düzeltme:** `index.json › embedding`'e yalnızca vektörü belirleyen alanlar yazılır (`provider`, `model`, `dimensions`, `normalized`); `batchSize` gibi çalışma ayarları yazılmaz → Node yalnızca `provider` + `model`'i karşılaştırır. `embed.py` ayrıca eski `chunks.json`'ı yakalar: `project.json › chunking` ile `chunks.json`'daki ayarlar farklıysa ya da `pages.json` daha yeniyse durur ve `chunk.py`'yi önerir. Dört senaryo test edildi (maxTokens, headingPatterns, batchSize, yeni pages.json); indeks yeniden üretildi.
-- İlk hızlı kontrol: "Ortak alanlar nasıl kullanılır?" → 7.1.7 (ilk 3'ün hepsi), "Kira ödemesi gecikirse…" → 7.2.1. "Firma kabul şartları nelerdir?" → ilk 3'te 7.1.5 / 7.2.1 / 7.1.6; beklenen 10.1 (Aday Girişimci Başvuru…) ilk 3'te değil. Puanlar 0.84–0.86 aralığında, birbirine çok yakın → 1.5'te incelenecek.
+### 1. Metin hazırlığı + metadata ✅
+- **Okuma:** PyMuPDF (`rag/loaders/pdf.py`). 41 sayfadan 37'si alınıyor. Kapak (s.1) ve İçindekiler (s.2–4) `skipPages` ile atlanıyor. Çıktı `index/<id>/pages.json` (~148 bin karakter).
+- **Temizlik** (`chunk.py`): fazla boşluklar teke indiriliyor, PDF'in kırdığı satırlar paragraf/madde olarak birleştiriliyor, satır sonunda `-` ile bölünen kelimeler birleştiriliyor. Unicode zaten NFC. Küçük harfe çevirme ve noktalama silme yok, çünkü embedding modeli doğal metinle çalışıyor.
+- **Yapı tespiti:** `project.json › chunking.headingPatterns` regex'leriyle 4 seviye (`1.`, `7.1.`, `7.1.5.`, `a.`). 96 başlık bulunuyor; 84'ünün altında metin var, kalanlar yalnızca üst başlık. Yakalanan biçimler: numara ile başlık ayrı satırda, boşluksuz `8.1.BAŞLIK`, alt satıra taşan büyük harfli başlık.
+- **Metadata** (kendi kodumuz, LangChain değil): `source`, `section` (ör. `7.1.5`), `title`, `path` (başlık yolu), `pages`. 186 chunk'ın hepsinde sayfa bilgisi var; 27'si iki sayfaya yayılıyor.
+- **Tablo/görsel:** içerikte yok. PyMuPDF'in bulduğu 3 tablo İçindekiler sayfalarında (atlanıyor). Görseller logo ve kapak resimleri.
 
-**24.11.2026 — Karar: adaptör yok, `e5-base`, HNSW.**
-- Embedding adaptör katmanı (`rag/providers/`) kaldırıldı. `embed.py` normal bir RAG gibi doğrudan `SentenceTransformer(embedding.model)` çağırıyor. Model adı ve önekler (`passagePrefix`, `queryPrefix`) `project.json`'dan okunuyor. Metin çıkarma (PyMuPDF) ve chunking (RecursiveCharacterTextSplitter, 300/50) değişmedi.
-- Model `intfloat/multilingual-e5-small` → **`intfloat/multilingual-e5-base`** oldu (768 boyut, 512 token sınırı, ~1.1 GB). Tokenizer aynı (XLM-R), bu yüzden `chunk.py` yeniden çalıştırıldığında 186 chunk metin, metadata ve token sayısıyla birebir aynı çıktı.
-- Vektör deposu artık **HNSW** (`hnswlib` 0.8): `space=cosine`, `M=16`, `efConstruction=200`, `efSearch=50`, `seed=100`. Vektörler `index/<id>/hnsw.bin` dosyasında, metin ve metadata `index.json`'da. HNSW etiketi `i` = `chunks[i]`.
-- Sonuç: 186 chunk 16.6 sn'de embed edildi (CPU). En fazla 302/512 token. HNSW 54 ms'de kuruldu. Diskten okunan indeksin recall@5 değeri kesin aramaya göre **1.000** (186 sorgu). Dosyalar: `hnsw.bin` 0.60 MB, `index.json` 0.26 MB. Tepe RAM ~745 MB.
-- Hızlı kontrol (HNSW, ilk 5): "Firma kabul şartları…" → 10.1 artık 3. sırada (small ile ilk 3'te yoktu). "Ortak alanlar…" → 7.1.7 ilk 2'de. "Kira ödemesi gecikirse…" → 7.2.1 ilk 4'te. Puanlar hâlâ birbirine çok yakın (0.80–0.83).
+### 2. Chunking ✅
+- **Strateji:** önce numaralı bölüme göre bölme; bir chunk asla iki bölümü karıştırmıyor. 300 tokeni aşan bölüm kendi içinde LangChain `RecursiveCharacterTextSplitter` ile bölünüyor. Bölme sırası: `•` madde başı → satır → cümle sonu → boşluk.
+- **Boyut token cinsinden** (`maxTokens` 300, `overlap` 50 ≈ %17). Token sayımı embedding modelinin tokenizer'ıyla yapılıyor (`embedding.model`'den okunuyor). Neden token: model 512 tokenden fazlasını sessizce kesiyor ve Türkçede karakter sayısı token sayısını tutmuyor (benzer token sayıları 205–1426 karaktere denk geliyor).
+- **Etiket:** her chunk başlık yoluyla başlıyor: `7. … > 7.1. … > 7.1.5. …` (186/186).
+- **Sonuç:** 186 chunk, 58–298 token (medyan ~227). 30 bölüm bölündü ve bunlardan 132 chunk çıktı; 54 bölüm tek parça. Overlap yalnızca bölünen bölümlerde var. Metin kaybı yok. Sınırı aşan chunk oluşursa `chunk.py` hata verip duruyor.
 
-**24.11.2026 — Karar: HNSW yerine FAISS flat (kesin arama).**
-- Ölçümler (Apple M2, 186 vektör, 20 gerçek soru):
-  | | HNSW (hnswlib, M=16, efSearch=50) | FAISS `IndexFlatIP` |
+### 3. Embedding ✅
+- **Model:** `intfloat/multilingual-e5-base`, `sentence-transformers` ile yerelde (adaptör yok). 768 boyut, 512 token sınırı, ~1.1 GB. Düz `e5-base` değil, **multilingual** sürüm.
+- **Önekler:** chunk'lar `passage: `, sorular `query: ` (`project.json › embedding`). Önekler olmadan kalite belirgin düşüyor.
+- **Kontroller** (`embed.py`, kaydetmeden önce): `chunks.json` güncel mi (ayarlar, tokenizer, `pages.json`'dan yeni mi), önek dahil token ≤ 512 (en fazla 302), vektör sayısı = chunk sayısı, NaN yok, norm = 1. Biri başarısızsa hiçbir dosya yazılmıyor.
+- **Süre:** 186 chunk ~17 sn (Apple M2, CPU). Tepe RAM ~750 MB.
+
+### 4. Vector DB ✅
+- **FAISS `IndexFlatIP`** (`faiss-cpu`): kesin arama. Soru bütün vektörlerle karşılaştırılıyor. Vektörler normalize olduğu için iç çarpım = cosine benzerliği.
+- **Dosyalar:** vektörler `index/<id>/faiss.index` (0.57 MB), metin ve metadata `index.json` (0.26 MB). Vektör `i` → `chunks[i]`.
+- **Kontrol:** `embed.py` diskten okunan indeksin ilk `topK` sonucunu numpy kesin aramasıyla karşılaştırıyor (yonerge: 1.000).
+- **Neden flat, HNSW değil:** 186 vektörde kesin arama HNSW'den ~10 kat hızlı (22 µs ve 208 µs), ayar gerektirmiyor ve hiçbir sonucu kaçırmıyor. Ölçümler karar günlüğünde (24.11). On binlerce vektörü geçerse `faiss.IndexHNSWFlat(dim, 16)`'ya geçilir.
+
+### 5. Query processing: routing ⬜
+- **Şu an:** soruya yalnızca `query: ` öneki ekleniyor.
+- **Amaç:** her soru retrieval'a girmesin. Soru önce bir rotaya ayrılır:
+
+  | Rota | Örnek | Ne olur | Nasıl tespit edilir |
+  |---|---|---|---|
+  | `geçersiz` | boş, tek harf, çok uzun metin | `messages.json`'daki uyarı mesajı | Kural (uzunluk sınırları `project.json`'da), LLM'e gitmez |
+  | `sohbet` | "merhaba", "teşekkürler" | Kısa, normal bir cevap | LLM |
+  | `konu_dışı` | hava durumu, makarna tarifi | "Bu konuda yardımcı olamam" mesajı | LLM |
+  | `belge` | "Firma kabul şartları nelerdir?" | Normal RAG akışı (6 → 9) | LLM |
+
+- **Yöntem:** tek bir LLM çağrısı (Gemini, `project.json › llm`). Prompt'a belgenin kapsamı tek cümleyle verilir (`project.json › routing.scope`) ve LLM soruyu `belge` / `sohbet` / `konu_dışı` olarak etiketler. Router hiçbir örnek listesi veya veri seti kullanmaz; yeni projede yalnızca `scope` cümlesi değişir.
+- **Neden embedding ile değil:** embedding ile routing hazır örnek cümlelere bağlı ve örneklerin arasına düşen garip sorularda yanlış karar verebilir. Retrieval puanıyla eşik koymak da kırılgan (konu dışı 0.76–0.78, cevaplı 0.80–0.86). LLM tek prompt ile daha basit ve daha genel.
+- **Bedeli:** soru başına bir ek LLM çağrısı (birkaç yüz ms) ve `GEMINI_API_KEY` bu adımda gerekiyor.
+- **Belirsizlik:** cevapsız ama konusu belgede olan sorular (ör. yemekhane saati) `belge` rotasına gider; bunları 9. adımdaki "bilgim yok" kuralı yakalar.
+- **Ölçüm:** küçük bir routing test seti (`eval/routing.jsonl`): `retrieval.jsonl`'daki 3 konu dışı ve 3 cevapsız soru + birkaç sohbet, geçersiz ve bilerek saçma soru. Bu set yalnızca test içindir, router onu kullanmaz. Rapor: rota başına doğruluk ve yanlış reddedilen `belge` soruları.
+- **Sonra (reranking'den sonra, ölçüme göre):**
+  - **Query rewriting:** soruyu belgenin diline çevirme, ör. "teknopark" → "Bölge", "firma" → "Girişimci". Eski plandaki eş anlamlı listesi bunun içinde değerlendirilecek.
+  - **Multi-query:** soruyu birkaç farklı biçimde yazıp sonuçları birleştirme.
+  - Hit@5 zaten 10/10 olduğu için kazanç Hit@1 ve MRR'de aranacak. Reranking aynı metrikleri hedeflediği için önce onun etkisi görülecek.
+
+### 6. Query embedding ✅
+- `search.py`: soru, chunk'larla aynı modelle (`embedding.model`) `query:` önekiyle ve normalize edilerek embed ediliyor.
+- Açılışta `index.json`'daki model `project.json` ile uyuşmazsa ya da `faiss.index` ile chunk sayısı farklıysa program duruyor.
+- Süre: soru başına ~15 ms. Uçtan uca darboğaz bu adım (arama ~0.02 ms).
+
+### 7. Retrieval 🔶
+- **Kullanım:** `python rag/search.py "soru"` (tek soru) veya `python rag/search.py --eval` (soru seti). `topK` = 5.
+- **Soru seti** `projects/yonerge/eval/retrieval.jsonl`, 16 soru:
+  - 10 cevaplı (kolay/orta/zor)
+  - 3 konu dışı (hava durumu, makarna tarifi, maç sonucu)
+  - 3 cevapsız: konusu belgede var ama cevabı yok (yemekhane saati, metrekare fiyatı, genel müdürün adı)
+- **Sonuç (e5-base + FAISS flat):**
+
+  | Metrik | Sonuç |
+  |---|---|
+  | Hit@1 | 7/10 |
+  | Hit@3 | 10/10 |
+  | **Hit@5** | **10/10** (hedef tuttu) |
+  | MRR | 0.817 |
+
+  | Doğru bölüm kaçıncı sırada | Sorular |
+  |---|---|
+  | 1. | q02 ortak alanlar, q03 kira/aidat gecikmesi, q04 tadilat izni, q06 personel takibi, q07 muafiyet raporu, q09 kuluçka mezuniyeti, q10 öğretim üyeleri |
+  | 2. | q05 ayrılma bildirimi |
+  | 3. | q01 firma kabul şartları, q08 yazılım KDV istisnası |
+
+- **q10 etiketi (24.11):** beklenen bölümlere 16.3 eklendi. 16.3 "Araştırma İş Birliği", öğretim üyelerinin projelerde yer alabileceğini doğrudan söylüyor. Önce yalnızca 16.1 doğru sayılıyordu ve q10 21. sıradaydı. Sebep dosyadaki `note` alanında yazıyor.
+- **Puan aralıkları (1. sonucun cosine puanı):**
+
+  | Grup | min | max |
   |---|---|---|
-  | Recall@1/5/10 | 1.0 / 1.0 / 1.0 (efSearch=10'da @5 0.94) | 1.0 (tanımı gereği) |
-  | Latency p50 (tek soru, 1 thread) | 208 µs | **22 µs** |
-  | QPS (tek tek, 1 thread) | ~4.800 | **~44.700** |
-  | Dosya | 0.60 MB | 0.57 MB (yalnızca vektörler) |
-  | Build | ~55 ms | ~0.02 ms |
-  | Ayar | M, efConstruction, efSearch | yok |
-- Sonuç: bu boyutta kesin arama daha hızlı, ayarsız ve hiçbir sonucu kaçırmıyor. HNSW'nin avantajı on binlerce vektörden sonra başlar; o zaman `faiss.IndexHNSWFlat(dim, 16)` ile aynı kütüphanede geçilir.
-- Uçtan uca darboğaz arama değil, soru embedding'i (~15 ms) → ~67 sorgu/sn.
-- HNSW sırasında bulunan not: `hnswlib` çok thread'le eklemede seed'e rağmen her kurulumda farklı graf üretiyordu (tek thread'de aynı). FAISS flat'te bu sorun yok, indeks deterministik.
+  | Cevaplı | 0.804 | 0.860 |
+  | Konu dışı | 0.762 | 0.784 |
+  | Cevapsız | 0.768 (u01) | 0.859 (u03) |
 
-**Sıradaki: 1.5 Retrieval testi** → `rag/search.py` (FAISS'ten okur) + 10 soruluk deney (doğru bölüm ilk 5'te mi?), ardından `topK` / `minScore`.
+  - Konu dışı sorular puanla **ayrılabiliyor**, ama boşluk yalnızca 0.02.
+  - Cevapsızlardan u02 (0.835) ve u03 (0.859) cevaplı sorulardan **ayrılamıyor**; bunları LLM'in "bilgim yok" demesi yakalamalı.
+- **`minScore` kararı (24.11): 0.0.** Boşluk çok dar olduğu için puan eşiği kullanılmıyor. Konu dışı soruları 5. adımdaki routing, cevapsız soruları 9. adımdaki "bilgim yok" kuralı yakalar. (Elenen seçenek: ~0.79 eşikle konu dışı soruları baştan elemek.)
 
-**17.11.2026 — Embedding kararı:** Deneysel aşamada kapsam küçük tutulacak. Embedding için yerel **`intfloat/multilingual-e5-small`** kullanılacak (adaptör: `e5`). API anahtarı ve kota gerekmez, aynı girdi her zaman aynı vektörü verir. Gemini embedding adaptörü sonra eklenebilir; geçiş `project.json`'da tek satır değişikliktir. Bugünün hedefi: **Document Processing + Embedding Pipeline** (temizlik → yapı tespiti → chunking → embedding → kaydet ve doğrula).
+### 8. Reranking ⬜
+- **Neden:** Hit@1 %70 ve ilk sonuçların puanları birbirine çok yakın (ör. q01'de 0.827 / 0.826 / 0.825).
+- **Plan:** FAISS'ten ilk ~20 sonucu al, soru ile metni birlikte okuyan bir cross-encoder ile yeniden sırala, ilk 5'i kullan. Türkçe destekleyen aday: `BAAI/bge-reranker-v2-m3` (henüz denenmedi).
+- **Ölçüm:** aynı `retrieval.jsonl` ile Hit@1 ve MRR'nin önceki ve sonraki değerleri karşılaştırılacak. Cevapsız soruları ayırmaya katkısı da ayrıca ölçülecek.
 
-**17.11.2026 — Yeni karar:** Sistem yönergeye özel olmayacak. Kod genel, içerik projeye özel olacak; yeni bir belge veya müşteri için yalnızca bir proje klasörü hazırlanacak. → **Adım 1.2b** (aşağıda) 1.3'ten önce yapılacak.
+### 9. Prompt oluşturma ⬜
+- **Plan:** `projects/<id>/prompts/system.md` şablonu (`{organization}`, `{assistantName}` değişkenleriyle) + seçilen chunk'lar (bölüm, başlık ve sayfa bilgisiyle) + soru.
+- **Kurallar:** yalnızca verilen metinden cevap ver; kaynak bölümü ve sayfayı göster; cevap metinde yoksa `messages.json`'daki "bilgim yok" mesajını kullan.
+
+### Sonrası: LLM cevabı, kaynak gösterme, değerlendirme ⬜
+- Gemini `gemini-3.5-flash-lite` (`project.json › llm`, temperature 0.1). `GEMINI_API_KEY` 5. adımdaki routing'den itibaren gerekiyor.
+- Kaynaklar backend'de, LLM'in seçtiği değil retrieval'ın getirdiği chunk'lardan üretiliyor.
+- Değerlendirme seti (`eval/testset.jsonl`) cevap kalitesini ölçecek (doğruluk, kaynak, "bilgim yok" davranışı). Değerlendirme scripti genel olacak.
 
 ## Temel ilke: çekirdek + proje paketi
 Sistem iki parçadan oluşur:
@@ -54,7 +123,7 @@ Sistem iki parçadan oluşur:
 | Parça | İçerik | Yeni projede |
 |---|---|---|
 | **Çekirdek** (`rag/`, `src/`, `public/`) | Extraction, chunking, embedding, retrieval, LLM çağrısı, guardrail motoru, API, arayüz | **Değişmez** |
-| **Proje paketi** (`projects/<proje-id>/`) | Belgeler, `project.json` ayarları, prompt'lar, mesaj metinleri, guardrail kuralları, test seti, arayüz metinleri | Yeniden yazılır |
+| **Proje paketi** (`projects/<proje-id>/`) | Belgeler, `project.json` ayarları, prompt'lar, mesaj metinleri, guardrail kuralları, test setleri, arayüz metinleri | Yeniden yazılır |
 
 **Kurallar**
 1. Çekirdek kodda belgeye özel hiçbir şey olmaz: dosya adı, sayfa numarası, başlık kalıbı, prompt, "Teknopark" kelimesi, model adı, eşik değeri. Bunların hepsi `project.json` veya proje klasöründen okunur.
@@ -62,17 +131,16 @@ Sistem iki parçadan oluşur:
 3. Model adları ve parametreler `project.json`'dan okunur. Embedding için ayrı bir adaptör katmanı yok (24.11.2026 kararı): kod doğrudan `sentence-transformers` kullanır, model değişirse `project.json`'da tek satır değişir.
 4. **Kabul kriteri:** Yeni bir proje eklerken `rag/`, `src/` veya `public/` altında kod değişikliği gerekiyorsa bu bir tasarım hatası sayılır ve çekirdek genelleştirilir.
 
-## Mimari kararı (16.11.2026, 17.11'de genelleştirildi)
-- **Python (`rag/`)**: Offline işler: belge okuma, chunking, embedding, indeks oluşturma,
-  retrieval denemeleri, değerlendirme. Çıktısı: `index/<proje-id>/index.json` + `faiss.index`.
-- **Node.js + Express (`src/`, Part 2)**: Çalışan web uygulaması. Aktif projenin `index.json`'ını okur,
-  soruyu embed eder, retrieval + LLM çağrısı yapar, arayüzü sunar.
+## Mimari
+- **Python (`rag/`)**: offline işler. Belge okuma, chunking, embedding, indeks oluşturma, retrieval denemeleri, değerlendirme. Çıktısı `index/<proje-id>/index.json` + `faiss.index`.
+- **Node.js + Express (`src/`, Part 2)**: çalışan web uygulaması. Aktif projenin indeksini okur, soruyu embed eder, retrieval + LLM çağrısı yapar, arayüzü sunar.
 - Uygulama çalışırken **tek sunucu** (Node) var; Python yalnızca indeks üretirken çalışır.
 - İki taraf arasındaki sözleşmeler:
-  - **`projects/<proje-id>/project.json`** → iki taraf da aynı ayar dosyasını okur. Ek bağımlılık gerekmesin diye YAML değil JSON (Python `json`, Node `JSON.parse`).
-  - **`index/<proje-id>/index.json` + `faiss.index`** → embedding modeli, önekler ve vektör deposu ayarları `index.json`'a yazılır, vektörler `faiss.index`'te (Node tarafında okuma yöntemi Part 2'de seçilecek). Node açılışta `project.json` ile `index.json`'daki embedding ayarlarını karşılaştırır. Uyuşmazsa **başlamaz** ve "indeksi yeniden oluştur" hatası verir (farklı modelle embed edilmiş soru ve parçalar karşılaştırılamaz).
+  - **`projects/<proje-id>/project.json`**: iki taraf da aynı ayar dosyasını okur. Ek bağımlılık gerekmesin diye YAML değil JSON.
+  - **`index/<proje-id>/index.json` + `faiss.index`**: embedding modeli, önekler ve vektör deposu ayarları `index.json`'da, vektörler `faiss.index`'te. Node açılışta `project.json` ile `index.json`'daki modeli karşılaştırır; uyuşmazsa **başlamaz** ve "indeksi yeniden oluştur" hatası verir.
+  - Node tarafında sorgu embedding'i `@huggingface/transformers` + `Xenova/multilingual-e5-base` (ONNX) ile yapılacak. Arama için `faiss-node` veya vektörleri okuyup dot product almak Part 2'de değerlendirilecek. Python ve Node aynı soru için aynı vektörü üretmeli; Part 2'de bir kez karşılaştırılacak.
 
-## Klasör yapısı (hedef)
+## Klasör yapısı
 ```
 tkpark-ragagent/
 ├── projects/
@@ -80,31 +148,26 @@ tkpark-ragagent/
 │   └── yonerge/                   # ilk proje paketi
 │       ├── project.json           # tüm projeye özel ayarlar
 │       ├── data/yonerge.pdf       # kaynak belge(ler)
-│       ├── prompts/
-│       │   ├── system.md          # botun kimliği ve kuralları ({değişken}'li şablon)
-│       │   └── messages.json      # "bilgim yok", ret, hata mesajları
-│       ├── guardrails/rules.json  # konu, PII kalıpları, şüpheli ifadeler (Part 4)
-│       └── eval/testset.jsonl     # değerlendirme seti (1.7)
+│       ├── eval/retrieval.jsonl   # ✅ retrieval soru seti (adım 7)
+│       ├── eval/routing.jsonl     # ⬜ routing test seti (adım 5)
+│       ├── eval/testset.jsonl     # ⬜ cevap değerlendirme seti
+│       ├── prompts/               # ⬜ routing.md (adım 5), system.md, messages.json (adım 5, 9)
+│       └── guardrails/rules.json  # ⬜ (Part 4)
 ├── rag/                           # Python çekirdek — projeden bağımsız
 │   ├── config.py                  # PROJECT seç → project.json + .env oku, doğrula
-│   ├── extract.py                 # kaynak → index/<id>/pages.json
-│   ├── chunk.py                   # (1.3) → index/<id>/chunks.json
-│   ├── embed.py                   # (1.4) → index/<id>/index.json + faiss.index
-│   ├── search.py                  # (1.5) retrieval testi
+│   ├── extract.py                 # 1 → index/<id>/pages.json
 │   ├── loaders/                   # pdf.py (PyMuPDF) — ileride docx.py, html.py…
-├── src/                           # Node çekirdek — projeden bağımsız (Part 2)
-│   ├── server.js
-│   ├── config.js                  # aynı project.json'ı okur
-│   ├── retrieval.js
-│   ├── providers/                 # llm/gemini.js, embedding/gemini.js …
-│   └── guardrails/                # kural motoru; kurallar proje klasöründen
+│   ├── chunk.py                   # 1–2 → index/<id>/chunks.json
+│   ├── embed.py                   # 3–4 → index/<id>/index.json + faiss.index
+│   ├── route.py                   # ⬜ 5 → soru rotası (geçersiz / sohbet / konu_dışı / belge)
+│   └── search.py                  # 6–7 → retrieval ve soru seti deneyi
+├── src/                           # Node çekirdek (Part 2) — server.js, config.js, retrieval.js, llm/, guardrails/
 ├── public/                        # arayüz (Part 3) — başlık/metinler /api/config'ten gelir
 ├── index/                         # üretilen dosyalar (git'e girmez)
-│   └── yonerge/{pages,chunks,index}.json
+│   └── yonerge/{pages.json, chunks.json, index.json, faiss.index}
 ├── .env.example
 └── requirements.txt
 ```
-`prompts/`, `guardrails/` ve `eval/` klasörleri ilgili adımda (1.6, 1.7, Part 4) oluşturulacak.
 
 ## `project.json` (yonerge örneği)
 ```json
@@ -143,6 +206,11 @@ tkpark-ragagent/
   },
   "vectorStore": { "type": "flat" },
   "llm":       { "provider": "gemini", "model": "gemini-3.5-flash-lite", "temperature": 0.1 },
+  "routing":   {
+    "scope": "YTÜ Yıldız Teknopark Bölge İşletme Yönergesi: firma kabulü, kira ve aidat, ortak alanlar, personel, tadilat, kuluçka, vergi muafiyetleri",
+    "minChars": 3,
+    "maxChars": 1000
+  },
   "retrieval": { "topK": 5, "minScore": 0.0 },
 
   "prompts": {
@@ -160,10 +228,11 @@ tkpark-ragagent/
   }
 }
 ```
-- `headingPatterns` üst seviyeden alta sıralıdır (1. eleman = 1. seviye); eşleşen kısım bölüm numarasıdır, kalan metin başlıktır.
-- `maxTokens: 300`, `overlap: 50`: token, embedding modelinin tokenizer'ıyla sayılır (başlık yolu dahil; `passage:` öneki ve özel tokenlar hariç). E5 en fazla 512 token alır ve fazlasını sessizce keser; 300 bu önekler ve pay için yer bırakır. 1.4'te önekli gerçek giriş yeniden doğrulanır.
-- `minScore` 1.5'teki retrieval testinden sonra ayarlanacak (Part 4'te konu dışı guardrail'i de bunu kullanacak).
-- Başlığı olmayan bir belgede `strategy: "fixed"` kullanılır; `heading` stratejisi hiçbir başlık bulamazsa `fallback`'e düşülür.
+- `headingPatterns` üst seviyeden alta sıralıdır (1. eleman = 1. seviye); eşleşen kısım bölüm numarası, kalan metin başlıktır. Başlığı olmayan belgede `strategy: "fixed"` kullanılır; `heading` hiç başlık bulamazsa `fallback`'e düşülür.
+- `maxTokens` / `overlap` token cinsinden, embedding modelinin tokenizer'ıyla sayılır (başlık yolu dahil, önek ve özel tokenlar hariç).
+- `routing.scope`: belgenin kapsamını anlatan tek cümle; routing prompt'una girer. `minChars` / `maxChars`: `geçersiz` rotasının kural sınırları (değerler örnek, adım 5'te test setiyle ayarlanacak).
+- `minScore`: 0.0 (adım 7 kararı). Konu dışı kontrolünü routing yapar.
+- Soru seti yolu isteğe bağlı olarak `eval.retrieval` ile değiştirilebilir (varsayılan `eval/retrieval.jsonl`).
 
 ## `index.json` + `faiss.index` sözleşmesi
 ```json
@@ -187,126 +256,126 @@ tkpark-ragagent/
 }
 ```
 - Vektörler `index.json`'da değil, `faiss.index`'te. FAISS vektörü `i` → `chunks[i]`, yani `chunks` sırası değiştirilmemeli.
-- `dimensions` modelin döndürdüğü gerçek boyuttan yazılır (`multilingual-e5-base` için 768). Vektörler normalize olduğu için `IndexFlatIP`'nin döndürdüğü iç çarpım doğrudan cosine benzerliğidir (1 = aynı yön).
-- `metadata` alanları kaynak türüne göre değişebilir; yalnızca `source` alanı zorunlu.
-
-## Embedding ve vektör deposu
-- **Model:** `intfloat/multilingual-e5-base`, `sentence-transformers` ile yerelde, `normalize_embeddings=True`. Düz `e5-base` değil, **multilingual** sürüm olmalı (düz sürüm İngilizce için eğitildi).
-- **Önekler:** chunk'lar `passage: `, sorular `query: ` ile embed edilir (`project.json › embedding`). Önekler olmadan kalite belirgin düşer.
-- **Giriş sınırı 512 token**, aşan metin kesilir. `chunking.maxTokens` bu yüzden 300 tutulur; `embed.py` önekli gerçek girişi ayrıca kontrol eder.
-- **Vektör deposu: FAISS `IndexFlatIP` (flat, kesin arama).** Soru bütün vektörlerle karşılaştırılır; ayar yok, recall her zaman 1.0. `embed.py`, diskten okunan indeksin ilk `topK` sonucunu numpy ile kesin aramayla karşılaştırır; uyuşmazsa dosya yazmaz. Vektör sayısı on binleri geçerse `faiss.IndexHNSWFlat(dim, 16)`'ya geçilir (HNSW ölçümleri yukarıda, 24.11 notunda).
-- **Node (Part 2):** sorgu embedding'i `@huggingface/transformers` + `Xenova/multilingual-e5-base` (ONNX) ile, arama için `faiss-node` veya vektörleri okuyup dot product almak seçenekleri Part 2'de değerlendirilecek. Python ve Node aynı soru için aynı vektörü üretmeli; Part 2'de bir kez karşılaştırılır.
-- Kalite yetmezse `intfloat/multilingual-e5-large` denenir (tek satır değişiklik + `chunk.py` ve `embed.py` yeniden).
-
-## Yeni proje ekleme (kontrol listesi)
-1. `projects/_template/` → `projects/<yeni-id>/` olarak kopyala
-2. Belgeleri `data/` altına koy, `project.json` → `sources` listesini doldur
-3. Belgenin başlık yapısına göre `chunking` ayarlarını yaz (başlık yoksa `fixed`)
-4. `prompts/system.md`, `messages.json`, `ui` metinlerini yeni alana göre yaz
-5. `.env` → `PROJECT=<yeni-id>`
-6. `python rag/extract.py && python rag/chunk.py && python rag/embed.py`
-7. `python rag/search.py` ile birkaç soru dene, `minScore`/`topK` ayarla
-8. `eval/testset.jsonl` hazırla ve değerlendirmeyi çalıştır
-9. `npm start` → arayüz yeni projenin başlık ve metinleriyle açılır
+- `dimensions` modelin döndürdüğü gerçek boyuttan yazılır. `metadata` alanları kaynak türüne göre değişebilir; yalnızca `source` zorunlu.
 
 ## İlk proje paketi: `yonerge` — belge notları
-- Dosya: `projects/yonerge/data/yonerge.pdf`
-- Başlık: YTÜ Yıldız Teknopark Bölge İşletme Yönergesi (bir "yönerge"; Bakanlık yönetmeliği değil)
-- 41 PDF sayfası, ~18.000 kelime, Word'den üretilmiş, metin katmanı var → OCR gerekmiyor
-- Tarih: Metinde onay/yürürlük tarihi veya sürüm yok. PDF metadata oluşturulma tarihi: 2025-01-28.
-- Sayfalarda basılı sayfa numarası yok. İçindekiler'deki numaralar = PDF sayfası − 1.
-  Uygulama yalnızca PDF sayfa sırasını kullanır.
-
-**Belge yapısı (→ `project.json` › `chunking`)**
-- Numaralı başlıklar: `1.` … `21.`, `7.1.`, `7.1.5.` (en fazla 3 seviye) + `7.2.2` altında `a.` / `b.`
-- Resmî yönetmelik biçimindeki "madde / fıkra / bent" (`MADDE 5 – (1) a)`) yapısı **yok**. Yapı tespiti bu başlık hiyerarşisiyle yapılır. İleride gerçek bir yönetmelik eklenirse yalnızca o projenin `headingPatterns`'ı yazılır.
-- İçerik çoğunlukla `•` maddeli kurallar ve paragraflar
-- Bölüm 3 "Tanım ve Kısaltmalar": `Terim: tanım` listesi
-- PDF s. 1 kapak, s. 2–4 İçindekiler → indekse alınmayacak (`skipPages`)
-- Tablo tespit edilmedi
+- Dosya: `projects/yonerge/data/yonerge.pdf`. YTÜ Yıldız Teknopark Bölge İşletme Yönergesi; bir "yönerge", Bakanlık yönetmeliği değil.
+- 41 PDF sayfası, ~18.000 kelime, Word'den üretilmiş, metin katmanı var → OCR gerekmiyor.
+- Metinde onay/yürürlük tarihi veya sürüm yok. PDF metadata oluşturulma tarihi: 2025-01-28.
+- Sayfalarda basılı sayfa numarası yok. İçindekiler'deki numaralar = PDF sayfası − 1. Uygulama yalnızca PDF sayfa sırasını kullanır.
+- **Yapı:** numaralı başlıklar `1.` … `21.`, `7.1.`, `7.1.5.` (en fazla 3 seviye) + `7.2.2` altında `a.` / `b.`. Resmî "madde / fıkra / bent" (`MADDE 5 – (1) a)`) yapısı **yok**; metin kendi içinde "6.4. maddesinde" diye bu numaralara atıf yapıyor.
+- İçerik çoğunlukla `•` maddeli kurallar ve paragraflar. Bölüm 3 "Tanım ve Kısaltmalar" bir `Terim: tanım` listesi.
+- Belgede "teknopark" yerine çoğunlukla "Bölge", "firma" yerine "Girişimci" geçiyor (ileride query rewriting için önemli).
 
 ## Yol haritası
-- **Part 1 — RAG çekirdeği (Python, terminal)**
-  - [x] 1.1 PDF incelemesi
-  - [x] 1.2 Text extraction (PyMuPDF) → `index/<id>/pages.json`
-  - [x] **1.2b Genelleştirme**
-    - `projects/yonerge/` ve `projects/_template/` klasörlerini oluştur, PDF'i taşı, `project.json` yaz
-    - `rag/config.py`: `PROJECT` → `project.json` okuma + doğrulama (eksik alan varsa açık hata)
-    - `rag/extract.py`: belge yolu ve `skipPages` config'ten gelsin; PDF okuma `rag/loaders/pdf.py`'de; çıktı `index/<id>/pages.json`
-    - `requirements.txt` (`pymupdf`)
-    - Kontrol: kodda `grep -ri "yonerge\|teknopark" rag/` sonuç vermemeli
-  - [x] 1.3 Temizlik + yapı tespiti + chunking (`heading` + `fixed` stratejileri, kalıplar config'ten) → `index/<id>/chunks.json`
-    - Text cleaning: PDF satır sonlarını birleştir, boş satır ve fazla boşlukları temizle
-    - Structure detection: `headingPatterns` ile başlık hiyerarşisi (`section`, `title`)
-    - Chunking: bölüm bazlı, `maxTokens` aşılırsa `bullet` sınırlarından böl
-  - [x] 1.4 Embeddings (`multilingual-e5-base` + FAISS flat, 24.11'de small'dan geçildi) → `index/<id>/index.json` + `faiss.index`
-    - [x] Hazırlık: `project.json` e5'e geçti, `sentence-transformers` kuruldu, model indirildi ve test edildi
-    - [x] Save & validate: vektör sayısı = chunk sayısı, tüm vektörler 768 boyutlu ve normalize, FAISS sonuçları kesin aramayla aynı, önekle birlikte hiçbir chunk 512 tokeni aşmıyor
-    - **Deney başarı ölçütü (1.5'te):** 10 soruda doğru bölüm `search.py` ile ilk 5 sonuçta geliyor
-  - [ ] 1.5 Retrieval testi (LLM yok) → `minScore`/`topK` belirlenir
-  - [ ] 1.6 LLM + backend'de üretilen kaynaklar (prompt `prompts/system.md`'den)
-  - [ ] 1.7 Değerlendirme seti (`projects/<id>/eval/testset.jsonl`, değerlendirme scripti genel)
-- **Part 2 — Web API (Node/Express):** `POST /api/chat`, `GET /api/config` (arayüz metinleri), aktif projenin `index.json`'ını okur, açılışta embedding uyumu kontrolü
+- **Part 1 — RAG çekirdeği (Python, terminal)**: yukarıdaki 9 adım + LLM cevabı ve değerlendirme
+  - [x] 1 Metin hazırlığı + metadata
+  - [x] 2 Chunking
+  - [x] 3 Embedding
+  - [x] 4 Vector DB
+  - [ ] 5 Query routing (geçersiz: kural; belge / sohbet / konu dışı: LLM; `routing.jsonl` ile ölç)
+  - [x] 6 Query embedding
+  - [ ] 7 Retrieval (deney tamam, Hit@5 10/10; `minScore` 0.0; commit kaldı)
+  - [ ] 8 Reranking (cross-encoder, aynı soru setiyle ölç)
+  - [ ] 5+ Query rewriting / multi-query (reranking'den sonra, ölçüme göre)
+  - [ ] 9 Prompt oluşturma
+  - [ ] LLM cevabı + backend'de üretilen kaynaklar
+  - [ ] Cevap değerlendirme seti ve scripti
+- **Part 2 — Web API (Node/Express):** `POST /api/chat`, `GET /api/config` (arayüz metinleri); aktif projenin indeksini okur; açılışta embedding uyumu kontrolü
 - **Part 3 — Arayüz:** HTML/CSS/vanilla JS; başlık, karşılama ve örnek sorular `/api/config`'ten
-- **Part 4 — Guardrails:** genel kural motoru (`src/guardrails/`) + projeye özel kurallar (`rules.json`) + saldırı/sınır test seti
-- **Part 5 — Taşınabilirlik testi:** farklı türde ikinci bir belgeyle (ör. başlıksız bir SSS veya kısa bir kılavuz) yeni proje paketi oluştur, **kod değiştirmeden** uçtan uca çalıştır
+- **Part 4 — Guardrails:** genel kural motoru (`src/guardrails/`) + projeye özel kurallar (`rules.json`) + saldırı/sınır test seti. Odak: prompt injection, saldırı ve sınır durumları, istenirse cevabın kaynaklara dayanıp dayanmadığı. Konu dışı kararını 5. adımdaki routing verir; ikinci bir konu dışı kontrolü yalnızca ölçümde routing'in kaçırdığı görülürse eklenir (her ek ret katmanı geçerli soruları yanlışlıkla reddetme riskini artırır).
+- **Part 5 — Taşınabilirlik testi:** farklı türde ikinci bir belgeyle (ör. başlıksız bir SSS) yeni proje paketi oluştur, **kod değiştirmeden** uçtan uca çalıştır
 - **Part 6 — Teslim:** README, mimari notu, "yeni proje nasıl eklenir" rehberi, 3 dk demo akışı (demoda proje değiştirmeyi de göster)
 
 ## Teknoloji kararları
-Bunlar varsayılanlardır. Sağlayıcı ve model `project.json`'dan seçildiği için değiştirmek kod değişikliği gerektirmez.
+Model ve parametreler `project.json`'dan seçildiği için değiştirmek kod değişikliği gerektirmez.
 
 | Bileşen | Seçim |
 |---|---|
 | Python | 3.11+ (test: 3.13), sanal ortam `.venv` |
 | PDF extraction | PyMuPDF (`pymupdf`) — `rag/loaders/pdf.py` |
-| Embedding | Yerel `intfloat/multilingual-e5-base`, 768 boyut (`sentence-transformers`, adaptör yok) |
-| LLM | Gemini `gemini-3.5-flash-lite` (adaptör: `gemini`) |
-| SDK | Embedding: Python `sentence-transformers`, Node `@huggingface/transformers`. LLM: Python `google-genai`, Node `@google/genai` (yalnızca adaptör dosyalarında) |
-| Vector store | FAISS `IndexFlatIP` (`faiss-cpu`, kesin arama, iç çarpım = cosine); metin/metadata `index.json`'da. Büyürse `IndexHNSWFlat` |
+| Chunking | Kendi başlık tespiti + LangChain `RecursiveCharacterTextSplitter` (`langchain-text-splitters`) |
+| Embedding | Yerel `intfloat/multilingual-e5-base`, 768 boyut (`sentence-transformers`) |
+| Vector store | FAISS `IndexFlatIP` (`faiss-cpu`, kesin arama); metin/metadata `index.json`'da. Büyürse `IndexHNSWFlat` |
+| Reranker | Aday: `BAAI/bge-reranker-v2-m3` (adım 8, denenmedi) |
+| LLM | Gemini `gemini-3.5-flash-lite` (Python `google-genai`, Node `@google/genai`) |
 | Proje ayarları | `projects/<id>/project.json` (Python ve Node ortak) |
 | Web (Part 2–3) | Node.js 22+, Express 5, HTML/CSS/vanilla JS |
 
-Not: FAISS tek dosyalık yerel bir indeks. Çok büyük veya sık güncellenen projelerde Qdrant, Chroma ya da pgvector gibi bir sunucu tabanlı veritabanına geçilebilir; bu değişiklik Node tarafında yalnızca `retrieval.js`'i etkiler.
+Not: FAISS tek dosyalık yerel bir indeks. Çok büyük veya sık güncellenen projelerde Qdrant, Chroma ya da pgvector gibi sunucu tabanlı bir veritabanına geçilebilir; bu değişiklik Node tarafında yalnızca `retrieval.js`'i etkiler.
 
 ## Dosyalar
-- `.env.example` — ortam değişkenleri şablonu (`PORT`, `PROJECT`, `GEMINI_API_KEY`); `.env` git'e girmez
-- `projects/yonerge/project.json` — ilk proje paketi ayarları; `projects/_template/` — yeni proje şablonu
-- `rag/config.py` — `--project` / `PROJECT` / `.env` ile proje seçer, `project.json`'ı okur ve doğrular
-  (`id` = klasör adı, `sources[].path` ve `type` dolu ve dosya mevcut). `project.get("a.b")` eksik alanda açık hata verir.
-  `.env` kendi küçük okuyucusuyla okunur (ek bağımlılık yok); tanımlı ortam değişkenleri önceliklidir.
-- `rag/loaders/` — `get_loader(type)` kaydı; `pdf.py` (PyMuPDF, `skipPages` uygular, PDF tarihini ISO'ya çevirir)
-- `rag/extract.py` — tüm `sources` → `index/<id>/pages.json`
-  (`schemaVersion`, `project`, `createdAt`, `sources[]` meta, `pages[]` = `{source, page, text}`; `page` = PDF sayfa sırası)
-- `rag/chunk.py` — `pages.json` → `index/<id>/chunks.json` (`chunks[]` = `{id, text, tokens, metadata: {source, section, title, path, pages}}`; `id` = `<proje>-<bölüm>-<sıra>`, `pages` = kaynak sayfa sırası). Satır birleştirme, başlık tespiti, bölüm içi bölme; sınırı aşan chunk varsa hata koduyla çıkar.
-- `rag/embed.py` — `chunks.json` → `SentenceTransformer` ile embedding → FAISS `IndexFlatIP` → `index/<id>/faiss.index` + `index.json` (`schemaVersion` 2: `embedding`, `vectorStore`, `chunking`, `chunks[]` = `{id, text, tokens, metadata}`). Kontroller: chunks.json güncel mi, token ≤ 512, sayı/NaN/norm, diskten okunan FAISS indeksinin sonuçları kesin aramayla aynı. Başarısızsa çıkış kodu 2 ve hiçbir dosya yazılmaz; `chunks.json` eskiyse çıkış kodu 1. İsteğe bağlı `embedding.batchSize` (varsayılan 32).
-- `requirements.txt` — `pymupdf`, `sentence-transformers` (PyTorch ile birlikte gelir), `langchain-text-splitters`, `faiss-cpu`. `multilingual-e5-base` modeli (~1.1 GB) ilk kullanımda Hugging Face'ten bir kez indirilir ve yerel önbellekte tutulur.
-- `package.json` — Node tarafı (Part 2'de doldurulacak)
+- `.env.example` — ortam değişkenleri şablonu (`PORT`, `PROJECT`, `GEMINI_API_KEY`); `.env` git'e girmez.
+- `projects/yonerge/project.json` — ilk proje paketi ayarları; `projects/_template/` — yeni proje şablonu.
+- `projects/yonerge/eval/retrieval.jsonl` — retrieval soru seti. Her satır `{id, question, expected: [bölüm], difficulty, note?}`. `expected` boşsa soru cevapsız/konu dışıdır ve `difficulty` etiketine göre gruplanır.
+- `rag/config.py` — `--project` / `PROJECT` / `.env` ile proje seçer, `project.json`'ı okur ve doğrular. `project.get("a.b")` eksik alanda açık hata verir.
+- `rag/loaders/` — `get_loader(type)` kaydı; `pdf.py` (PyMuPDF, `skipPages` uygular, PDF tarihini ISO'ya çevirir).
+- `rag/extract.py` — tüm `sources` → `index/<id>/pages.json` (`pages[]` = `{source, page, text}`; `page` = PDF sayfa sırası).
+- `rag/chunk.py` — `pages.json` → `index/<id>/chunks.json` (`chunks[]` = `{id, text, tokens, metadata}`; `id` = `<proje>-<bölüm>-<sıra>`). Sınırı aşan chunk varsa hata koduyla çıkar.
+- `rag/embed.py` — `chunks.json` → embedding → FAISS → `faiss.index` + `index.json`. Kontroller başarısızsa çıkış kodu 2 ve hiçbir dosya yazılmaz; `chunks.json` eskiyse çıkış kodu 1. İsteğe bağlı `embedding.batchSize` (varsayılan 32).
+- `rag/search.py` — tek soru (`"soru"`) veya soru seti (`--eval`, `--top N`). Rapor: Hit@1/3/5, MRR, ilk K'ya giremeyenler, grup bazında puan aralıkları ve `minScore` ile ayrım yapılıp yapılamadığı.
+- `requirements.txt` — `pymupdf`, `sentence-transformers` (PyTorch ile gelir), `langchain-text-splitters`, `faiss-cpu`. Model (~1.1 GB) ilk kullanımda Hugging Face'ten bir kez indirilir.
+- `package.json` — Node tarafı (Part 2'de doldurulacak).
 
 ## Nasıl çalıştırılır
 ```bash
-cp .env.example .env               # E5 yerel çalışır; GEMINI_API_KEY yalnızca LLM (1.6) için gerekir
+cp .env.example .env               # GEMINI_API_KEY routing (adım 5) ve LLM adımında gerekir
 python3 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-python rag/extract.py              # veya: python rag/extract.py --project yonerge
-python rag/chunk.py
-python rag/embed.py
+python rag/extract.py              # 1   → pages.json  (veya --project yonerge)
+python rag/chunk.py                # 1–2 → chunks.json
+python rag/embed.py                # 3–4 → index.json + faiss.index
+python rag/search.py "Ortak alanlar nasıl kullanılır?"   # 6–7 tek soru
+python rag/search.py --eval        # 6–7 soru seti deneyi
 ```
-Beklenen: `Sayfa sayısı: 41`, `Atlanan sayfalar: [1, 2, 3, 4]`, `Alınan sayfalar: 37`, `Az metinli sayfalar: []`, `Oluşturulma tarihi: 2025-01-28`.
+Beklenen: `extract.py` → 41 sayfa, 4 atlanan, 37 alınan. `chunk.py` → 96 bölüm, 186 chunk. `embed.py` → `Doğrulama: tamam`. `search.py --eval` → Hit@5 10/10.
+
+## Yeni proje ekleme (kontrol listesi)
+1. `projects/_template/` → `projects/<yeni-id>/` olarak kopyala.
+2. Belgeleri `data/` altına koy, `project.json` → `sources` listesini doldur.
+3. Belgenin başlık yapısına göre `chunking` ayarlarını yaz (başlık yoksa `fixed`).
+4. `prompts/system.md`, `messages.json`, `ui` metinlerini yeni alana göre yaz.
+5. `.env` → `PROJECT=<yeni-id>`.
+6. `python rag/extract.py && python rag/chunk.py && python rag/embed.py`
+7. `eval/retrieval.jsonl` soru setini yaz, `python rag/search.py --eval` ile `topK`/`minScore` ayarla.
+8. `eval/testset.jsonl` hazırla ve cevap değerlendirmesini çalıştır.
+9. `npm start` → arayüz yeni projenin başlık ve metinleriyle açılır.
 
 ## Mevcut sınırlamalar
-- `pages.json` ham metindir; satır birleştirme ve boşluk temizliği `chunk.py`'de yapılır.
-- Paragraf sınırı sezgiseldir: satır `. : ; ! ?` ile bitiyorsa, boş satır, `•` veya `Terim:` ile başlıyorsa yeni blok. Yanlış birleşme yalnızca bölme noktasını etkiler, metin kaybolmaz.
+- Paragraf sınırı sezgisel: satır `. : ; ! ?` ile bitiyorsa ya da boş satır, `•` veya `Terim:` ile başlıyorsa yeni blok. Yanlış birleşme yalnızca bölme noktasını etkiler, metin kaybolmaz.
+- e5 puanları dar bir aralıkta (cevaplı 0.80–0.86, ilgisiz 0.76–0.78). Bu yüzden sabit bir `minScore` kırılgan.
+- Soru seti küçük (16 soru); sonuçlar yön gösterir, kesin değildir.
 
-## Repo durumu (17.11.2026)
-- Remote: `origin` → `github.com/senasagdc/tkpark-rag` (doğru adres).
-- Eski JS denemesi (`src/src/src/`, pdfjs) kaldırıldı.
-- `.gitignore`: `.env`, `index/`, `.venv/`, `__pycache__/`, `node_modules/`.
-- `.env.example` eklendi; yerel `.env` ondan kopyalandı (anahtar boş).
-- API anahtarı hiçbir dosyada yok.
-- Kullanılmayan `.vscode/` klasörü silindi.
+## Repo durumu (24.11.2026)
+- Remote: `origin` → `github.com/senasagdc/tkpark-rag`. Çalışma dalı `main`.
+- `feat/1.5-retrieval-test` dalı (19.11) eski, adaptörlü yapıya göre yazılmıştı. Soru seti oradan alındı, `search.py` yeni yapıya göre baştan yazıldı. Dal, yeni sürüm `main`'e girdikten sonra silinecek (karar bekliyor).
+- `.gitignore`: `.env`, `index/`, `.venv/`, `__pycache__/`, `node_modules/`, `.DS_Store`. API anahtarı hiçbir dosyada yok.
 
-## Sonraki adım (bugünün hedefi: Document Processing + Embedding Pipeline)
-1. ~~1.3 Chunking~~ ✓
-2. ~~1.4 Embedding~~ ✓ (24.11: e5-base + FAISS flat)
-3. Hızlı deney (1.5): 10 soruyla `search.py`; doğru bölüm ilk 5'te değilse önce chunking'e, sonra modele bakılır.
+## Karar günlüğü
+**16.11.2026 — Mimari:** offline işler Python'da (`rag/`), çalışan uygulama Node/Express'te (`src/`). Aralarındaki sözleşme `project.json` + indeks dosyaları.
+
+**17.11.2026 — Genelleştirme:** sistem yönergeye özel olmayacak. Kod genel, içerik proje klasöründe (`projects/<id>/`). Eski JS denemesi (`src/src/src/`, pdfjs) ve kullanılmayan `.vscode/` kaldırıldı.
+
+**17.11.2026 — Chunking:** önce başlık, sonra `RecursiveCharacterTextSplitter`; boyut karakter yerine token (`maxTokens` 300, `overlap` 50). PDF'teki farklı başlık biçimlerine göre `headingPatterns` düzeltildi.
+
+**17.11.2026 — İlk embedding:** yerel `multilingual-e5-small` (384 boyut) + `rag/providers/` adaptörü; vektörler `index.json` içinde. `embed.py`'ye eski `chunks.json` kontrolü eklendi. İlk denemede "Firma kabul şartları" için beklenen 10.1 bölümü ilk 3'te çıkmadı.
+
+**24.11.2026 — Adaptör kaldırıldı, `e5-base`'e geçildi:** `rag/providers/` silindi; `embed.py` doğrudan `SentenceTransformer` kullanıyor, önekler `project.json`'da. Model `multilingual-e5-base` (768 boyut) oldu. Tokenizer aynı olduğu için 186 chunk birebir aynı kaldı. 10.1 bölümü ilk 3'e girdi.
+
+**24.11.2026 — HNSW denendi, FAISS flat seçildi:**
+
+| (Apple M2, 186 vektör, 20 soru) | HNSW (`hnswlib`, M=16, efC=200, efSearch=50) | FAISS `IndexFlatIP` |
+|---|---|---|
+| Recall@1/5/10 | 1.0 (efSearch=10'da @5 0.94) | 1.0 (tanımı gereği) |
+| Latency p50 (tek soru, 1 thread) | 208 µs | **22 µs** |
+| QPS (tek tek, 1 thread) | ~4.800 | **~44.700** |
+| Dosya | 0.60 MB | 0.57 MB |
+| Build | ~55 ms | ~0.02 ms |
+| Ayar | M, efConstruction, efSearch | yok |
+
+Bu boyutta kesin arama daha hızlı ve ayarsız. Ölçüm sırasında `hnswlib`'in çok thread'li eklemede seed'e rağmen her kurulumda farklı graf ürettiği görüldü; FAISS flat deterministik.
+
+**24.11.2026 — Retrieval testi (adım 6–7):** `search.py` yeni yapıya göre baştan yazıldı; soru seti `feat/1.5-retrieval-test` dalından aynen alındı. İlk sonuç Hit@5 9/10 oldu (q10 21. sırada). 16.3 bölümünün de q10'u cevapladığı görülünce beklenen bölümlere eklendi → Hit@5 10/10, MRR 0.817. Proje 9 adımlık RAG akışına göre yeniden düzenlendi.
+
+**24.11.2026 — Query processing: önce routing, rewriting ve multi-query sonra:** 5. adım şimdilik yalnızca query routing. Rotalar `geçersiz` (kural), `sohbet`, `konu_dışı` ve `belge` (LLM, `routing.scope` cümlesiyle). Embedding ile routing seçilmedi, çünkü hazır örnek cümlelere bağlı ve garip sorularda zayıf. Retrieval puanıyla eşik de seçilmedi, çünkü boşluk 0.02. Buna bağlı olarak `minScore` 0.0 kaldı (A seçeneği). Konu dışı kararını routing verir; Part 4 guardrail'i saldırı ve sınır durumlarına odaklanır. Query rewriting (eş anlamlı listesi dahil) ve multi-query, reranking'den sonra Hit@1/MRR ölçümüne göre değerlendirilecek.
