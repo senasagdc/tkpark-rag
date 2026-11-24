@@ -25,9 +25,16 @@
   },
   "vectorStore": { "type": "flat" },
   "llm":       { "provider": "gemini", "model": "gemini-3.5-flash-lite", "temperature": 0.1 },
+  "routing": {
+    "scope": "Belgenin adı ve kapsadığı konular, tek cümle",
+    "minChars": 3,
+    "maxChars": 1000,
+    "temperature": 0.0
+  },
   "retrieval": { "topK": 5, "minScore": 0.0 },
 
   "prompts": {
+    "routing": "prompts/routing.md",
     "system": "prompts/system.md",
     "messages": "prompts/messages.json",
     "vars": { "organization": "Kurum adı", "assistantName": "Asistan adı" }
