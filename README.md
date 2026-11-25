@@ -1,8 +1,8 @@
-# Teknopark Yönerge RAG Asistanı
+#  Yönerge RAG Asistanı
 
 Staj birinci hafta notlarım: https://wholesale-raptorex-e7c.notion.site/STAJ-Hafta-1-41ab21c0f4d4800989ecee22ddcc9f9f
 
-YTÜ Yıldız Teknopark Bölge İşletme Yönergesi için RAG tabanlı soru-cevap asistanı. Ayrıntılar için [PROJECT.md](PROJECT.md).
+Teknopark Bölge İşletme Yönergesi için RAG tabanlı soru-cevap asistanı. Ayrıntılar için [PROJECT.md](PROJECT.md).
 
 ## Nerede kaldım
 
