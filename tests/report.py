@@ -1,13 +1,13 @@
-"""Cevap değerlendirmesi analizi: answer.py --eval sonucundan Markdown rapor üretir.
+"""Cevap testi raporu: tests/answer_test.py sonucundan Markdown rapor üretir (mentora göstermek için).
 
 Kullanım:
-    python rag/analyze.py                                  # en son eval/results/answer-*.json
-    python rag/analyze.py projects/yonerge/eval/results/answer-20261126-153000.json
-    python rag/analyze.py --compare <eski.json>            # önceki bir çalıştırmayla karşılaştır
-    python rag/analyze.py --stdout                         # dosyaya yazmadan ekrana bas
+    python tests/report.py                                 # eval/results/ içindeki en yeni sonuç
+    python tests/report.py projects/yonerge/eval/results/cevaplar2.json
+    python tests/report.py --compare <eski.json>           # önceki bir çalıştırmayla karşılaştır
+    python tests/report.py --stdout                        # dosyaya yazmadan ekrana bas
 
 Girdiler (proje klasörüne göre):
-    eval/results/answer-*.json   answer.py --eval çıktısı (soru, beklenen, çıkan, cevap, kaynaklar,
+    eval/results/*.json          tests/answer_test.py çıktısı (soru, beklenen, çıkan, cevap, kaynaklar,
                                  LLM'e giden parçalar, gecikme, tekrar denemeler, ayarlar)
     eval/review.jsonl            elle inceleme notları (isteğe bağlı), her satır:
         {"id": "u02", "when_type": "cevap", "type_ok": true, "label_issue": true,
@@ -32,7 +32,9 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from config import ROOT, ConfigError, load_project
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "rag"))
+
+from config import ROOT, ConfigError, load_project  # noqa: E402
 
 TYPES = ("geçersiz", "cevap", "bilgi_yok", "sohbet", "hata")
 LLM_TYPES = ("cevap", "bilgi_yok", "sohbet")
@@ -51,11 +53,19 @@ def display(path: Path) -> str:
 
 # ---- okuma
 def latest_result(project) -> Path:
+    """Sonuç klasöründeki en yeni cevap testi sonucu (dosya adı ne olursa olsun, createdAt'e göre)."""
     folder = project.path(project.get("eval.resultsDir", DEFAULT_RESULTS_DIR))
-    files = sorted(folder.glob("answer-*.json"))
-    if not files:
-        raise ConfigError(f"{display(folder)} içinde sonuç yok. Önce: python rag/answer.py --eval")
-    return files[-1]
+    found = []
+    for f in folder.glob("*.json"):
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        if isinstance(data, dict) and data.get("kind") == "answer-eval":
+            found.append((data.get("createdAt", ""), f))
+    if not found:
+        raise ConfigError(f"{display(folder)} içinde sonuç yok. Önce: python tests/answer_test.py")
+    return max(found)[1]
 
 
 def load_result(path: Path) -> dict:
@@ -63,7 +73,7 @@ def load_result(path: Path) -> dict:
         raise ConfigError(f"Bulunamadı: {path}")
     data = json.loads(path.read_text(encoding="utf-8"))
     if data.get("kind") != "answer-eval":
-        raise ConfigError(f"{path.name}: answer.py --eval sonucu değil.")
+        raise ConfigError(f"{path.name}: tests/answer_test.py sonucu değil.")
     return data
 
 
@@ -283,13 +293,13 @@ def build_report(data: dict, result_path: Path, compare: dict | None) -> str:
                  [[r["id"], r["expect"], r["type"] + ("" if r["type_ok"] else " ✗"), f"{r['ms']:.0f}",
                    ", ".join(x["section"] for x in r["sources"]), short(r["answer"] if r["type"] in ("cevap", "sohbet") else "", 140)]
                   for r in rows]) + [""]
-    out += ["---", "Rapor `rag/analyze.py` ile üretildi. Otomatik ölçümler cevap metninin doğruluğunu ölçmez; "
+    out += ["---", "Rapor `tests/report.py` ile üretildi. Otomatik ölçümler cevap metninin doğruluğunu ölçmez; "
             "elle inceleme notları `eval/review.jsonl` dosyasından gelir.", ""]
     return "\n".join(out)
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="answer.py --eval sonucundan Markdown rapor üretir.")
+    parser = argparse.ArgumentParser(description="Cevap testi sonucundan Markdown rapor üretir.")
     parser.add_argument("result", nargs="?", help="sonuç dosyası (varsayılan: en son eval/results/answer-*.json)")
     parser.add_argument("--compare", help="karşılaştırılacak önceki sonuç dosyası")
     parser.add_argument("--stdout", action="store_true", help="raporu dosyaya yazmadan ekrana bas")

@@ -86,10 +86,16 @@ python rag/extract.py              # PDF → pages.json
 python rag/chunk.py                # → chunks.json
 python rag/embed.py                # → index.json + faiss.index
 python rag/search.py "Ortak alanlar nasıl kullanılır?"
-python rag/search.py --eval        # retrieval test seti
 python rag/answer.py "Firma kabul şartları nelerdir?"   # cevap + kaynaklar
 python rag/answer.py "Merhaba" --dry-run                 # LLM'e gitmeden prompt'u göster
-python rag/answer.py --eval        # cevap test seti (eval/testset.jsonl)
 ```
 
-Not: Gemini ücretsiz planı dakikada 15 istekle sınırlı, `answer.py --eval` bu yüzden yavaş çalışabilir.
+Ölçüm (chatbot için gerekli değil, açıklama `tests/README.md`'de):
+
+```bash
+python tests/retrieval_test.py     # arama doğru bölümü buluyor mu (LLM yok)
+python tests/answer_test.py        # cevap test seti (eval/testset.jsonl) → eval/results/
+python tests/report.py             # en yeni sonuçtan mentor raporu → eval/reports/
+```
+
+Not: Gemini ücretsiz planı dakikada 15 istekle sınırlı, `tests/answer_test.py` bu yüzden yavaş çalışabilir.
