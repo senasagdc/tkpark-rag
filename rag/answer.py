@@ -12,9 +12,12 @@ Cevap türleri:
 
 Kullanım:
     python rag/answer.py "Firma kabul şartları nelerdir?"
-    python rag/answer.py --eval                    # eval/testset.jsonl
+    python rag/answer.py --eval                    # eval/testset.jsonl → eval/results/answer-<zaman>.json
     python rag/answer.py --eval --only q01,s01     # yalnızca bu id'ler
+    python rag/answer.py --eval --no-save          # sonucu dosyaya yazma
     python rag/answer.py "soru" --dry-run          # LLM'e gitmeden prompt'u yazdır
+
+--eval sonucu JSON olarak kaydedilir; rapor için: python rag/analyze.py
 
 Ayarlar project.json'dan:
     input.minChars / input.maxChars   girdi kontrolü sınırları
@@ -23,6 +26,7 @@ Ayarlar project.json'dan:
     prompts.system                    sistem prompt'u ({organization}, {assistantName} ... prompts.vars'tan)
     prompts.messages                  "geçersiz", "bilgi_yok", "hata" sabit metinleri
     eval.testset                      test seti (varsayılan: eval/testset.jsonl)
+    eval.resultsDir                   sonuç klasörü (varsayılan: eval/results)
 
 Kaynaklar backend'de üretilir: LLM yalnızca kullandığı parçaların numarasını döndürür,
 bölüm / başlık / sayfa bilgisi retrieval'ın getirdiği chunk'ların metadata'sından gelir.
@@ -32,18 +36,21 @@ Böylece LLM var olmayan bir kaynak uyduramaz.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
 import statistics
 import sys
 import time
+from datetime import datetime
 
 from config import ROOT, ConfigError, load_project
 
 TYPES = ("geçersiz", "cevap", "bilgi_yok", "sohbet", "hata")
 LLM_TYPES = ("cevap", "bilgi_yok", "sohbet")
 DEFAULT_EVAL_FILE = "eval/testset.jsonl"
+DEFAULT_RESULTS_DIR = "eval/results"
 TIMEOUT_MS = 30_000
 RETRIES = 3
 MAX_WAIT_LIVE = 2.0    # canlı kullanımda kota dolarsa en fazla bu kadar bekle
@@ -95,6 +102,8 @@ class Assistant:
         self.top_k = int(project.get("retrieval.topK"))
         self.model_name = project.get("llm.model")
         self.temperature = float(project.get("llm.temperature", 0.1))
+        self.embedding_model = project.get("embedding.model")
+        self.project = project
 
         values = dict(project.get("prompts.vars", {}))
         self.system = fill(read_file(project, "prompts.system").read_text(encoding="utf-8"), values)
@@ -138,7 +147,7 @@ class Assistant:
         hits = []
         for s, i in zip(scores[0][: self.top_k], ids[0][: self.top_k]):
             c = self.retriever.chunks[int(i)]
-            hits.append({"score": float(s), "text": c["text"], **c["metadata"]})
+            hits.append({"score": float(s), "id": c["id"], "text": c["text"], **c["metadata"]})
         return hits
 
     def build_prompt(self, text: str, hits: list[dict]) -> str:
@@ -152,6 +161,7 @@ class Assistant:
     def ask_llm(self, prompt: str) -> dict:
         """429 / 503'te tekrar dener; önerilen bekleme max_wait'i aşarsa hatayı yükseltir."""
         self.waited = 0.0
+        self.retries = []
         for attempt in range(RETRIES + 1):
             try:
                 response = self.client.models.generate_content(
@@ -168,6 +178,7 @@ class Assistant:
                 print(f"    ({code}, {wait:.0f} sn bekleyip tekrar deneniyor)", file=sys.stderr)
                 time.sleep(wait)
                 self.waited += wait
+                self.retries.append(code)
         data = json.loads(response.text)
         if data.get("type") not in LLM_TYPES:
             raise ValueError(f"beklenmeyen tür: {data.get('type')!r}")
@@ -193,6 +204,7 @@ class Assistant:
         """→ {type, answer, sources, hits, detail, ms}"""
         start = time.perf_counter()
         self.waited = 0.0
+        self.retries = []
         text = (question or "").strip()
         result = {"type": None, "answer": None, "sources": [], "hits": [], "detail": None}
 
@@ -227,7 +239,15 @@ class Assistant:
                                   detail=short(f"{type(e).__name__}: {e}", 200))
 
         result["ms"] = (time.perf_counter() - start - self.waited) * 1000
+        result["waited_s"] = self.waited
+        result["retries"] = list(self.retries)
         return result
+
+    def settings(self) -> dict:
+        return {"model": self.model_name, "temperature": self.temperature, "topK": self.top_k,
+                "minChars": self.min_chars, "maxChars": self.max_chars,
+                "embedding": self.embedding_model,
+                "systemPromptSha1": hashlib.sha1(self.system.encode("utf-8")).hexdigest()[:12]}
 
 
 def format_sources(sources: list[dict]) -> list[str]:
@@ -254,7 +274,39 @@ def load_eval(project) -> list[dict]:
     return items
 
 
-def run_eval(a: Assistant, items: list[dict]) -> int:
+def save_results(a: Assistant, items: list[dict], results: list) -> str:
+    """--eval sonucunu analyze.py'nin okuyacağı JSON olarak kaydeder."""
+    started = datetime.now()
+    out_dir = a.project.path(a.project.get("eval.resultsDir", DEFAULT_RESULTS_DIR))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / f"answer-{started:%Y%m%d-%H%M%S}.json"
+    rows = []
+    for it, r, ok, src_ok in results:
+        rows.append({
+            "id": it["id"], "question": it["question"], "expect": it["expect"],
+            "sections": it.get("sections", []), "note": it.get("note"),
+            "type": r["type"], "type_ok": ok, "source_ok": src_ok,
+            "answer": r["answer"], "sources": r["sources"], "detail": r["detail"],
+            "hits": [{"id": h.get("id"), "section": h.get("section"), "score": round(h["score"], 4),
+                      "pages": h.get("pages")} for h in r["hits"]],
+            "ms": round(r["ms"], 1), "waited_s": r.get("waited_s", 0.0), "retries": r.get("retries", []),
+        })
+    data = {"kind": "answer-eval", "project": a.project.id, "createdAt": started.isoformat(timespec="seconds"),
+            "testset": a.project.get("eval.testset", DEFAULT_EVAL_FILE), "complete": len(items) == len(load_eval(a.project)),
+            "settings": a.settings(), "results": rows}
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return display(path)
+
+
+def display(path) -> str:
+    """Proje kökü altındaysa göreli, değilse mutlak yol."""
+    try:
+        return path.resolve().relative_to(ROOT).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def run_eval(a: Assistant, items: list[dict], save: bool = True) -> int:
     results = []
     for it in items:
         r = a.answer(it["question"])
@@ -310,6 +362,9 @@ def run_eval(a: Assistant, items: list[dict]) -> int:
               f" en fazla {max(llm_ms):.0f} ms ({len(llm_ms)} çağrı)")
     print(f"Ayarlar: model={a.model_name}, temperature={a.temperature}, topK={a.top_k},"
           f" minChars={a.min_chars}, maxChars={a.max_chars}")
+    if save:
+        print(f"\nSonuç kaydedildi: {save_results(a, items, results)}")
+        print("Rapor için: python rag/analyze.py")
     return 0
 
 
@@ -319,6 +374,7 @@ def main() -> int:
     parser.add_argument("--eval", action="store_true", help="test setini çalıştır")
     parser.add_argument("--only", help="--eval'de yalnızca bu id'ler (virgülle)")
     parser.add_argument("--dry-run", action="store_true", help="LLM'e gitme, prompt'u yazdır")
+    parser.add_argument("--no-save", action="store_true", help="--eval sonucunu dosyaya kaydetme")
     parser.add_argument("--project", help="projects/ altındaki proje klasörü (varsayılan: .env PROJECT)")
     args = parser.parse_args()
     if args.question is None and not args.eval:
@@ -334,7 +390,7 @@ def main() -> int:
             if args.only:
                 wanted = set(args.only.split(","))
                 items = [it for it in items if it["id"] in wanted]
-            return run_eval(a, items)
+            return run_eval(a, items, save=not args.no_save)
     except ConfigError as e:
         print(f"Ayar hatası: {e}", file=sys.stderr)
         return 1
