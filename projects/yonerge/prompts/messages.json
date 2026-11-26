@@ -1,4 +1,5 @@
 {
   "geçersiz": "Mesajınızı anlayamadım. Lütfen sorunuzu kısa ve anlaşılır bir cümleyle yazın.",
-  "konu_dışı": "Bu konuda yardımcı olamam. Yalnızca {organization} Bölge İşletme Yönergesi hakkındaki soruları yanıtlayabilirim."
+  "bilgi_yok": "Bu konuda yönergede bir bilgi bulamadım. Yalnızca {organization} Bölge İşletme Yönergesi hakkındaki soruları yanıtlayabilirim.",
+  "hata": "Şu anda cevap veremiyorum. Lütfen biraz sonra tekrar deneyin."
 }
