@@ -41,6 +41,8 @@ LLM_TYPES = ("cevap", "bilgi_yok", "sohbet")
 DEFAULT_RESULTS_DIR = "eval/results"
 DEFAULT_REPORTS_DIR = "eval/reports"
 DEFAULT_REVIEW_FILE = "eval/review.jsonl"
+# eski sonuç dosyalarında vectorStore yok: o zaman yalnızca FAISS vardı
+STORE_LABELS = {"flat": "FAISS", "pgvector": "PostgreSQL + pgvector"}
 
 
 def display(path: Path) -> str:
@@ -187,7 +189,8 @@ def build_report(data: dict, result_path: Path, compare: dict | None) -> str:
             f"- **Test seti:** `{data['testset']}`, {s['n']} soru" + ("" if data.get("complete", True) else " (kısmi çalıştırma)"),
             f"- **Ayarlar:** model `{st['model']}`, temperature {st['temperature']}, topK {st['topK']}, "
             f"embedding `{st['embedding']}`, system prompt `{st['systemPromptSha1']}`",
-            "- **Akış:** girdi kontrolü → retrieval (FAISS, ilk topK parça) → tek LLM çağrısı (JSON şeması: "
+            f"- **Akış:** girdi kontrolü → retrieval ({STORE_LABELS.get(st.get('vectorStore', 'flat'), st.get('vectorStore'))}"
+            ", ilk topK parça) → tek LLM çağrısı (JSON şeması: "
             "`cevap` / `bilgi_yok` / `sohbet` + kullanılan parça numaraları) → kaynaklar backend'de", ""]
 
     # özet

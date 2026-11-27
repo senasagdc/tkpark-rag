@@ -236,7 +236,7 @@ class Assistant:
     def settings(self) -> dict:
         return {"model": self.model_name, "temperature": self.temperature, "topK": self.top_k,
                 "minChars": self.min_chars, "maxChars": self.max_chars,
-                "embedding": self.embedding_model,
+                "embedding": self.embedding_model, "vectorStore": self.project.get("vectorStore.type"),
                 "systemPromptSha1": hashlib.sha1(self.system.encode("utf-8")).hexdigest()[:12]}
 
 

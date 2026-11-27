@@ -52,7 +52,7 @@ def db_settings() -> dict:
 
     Öncelik: DATABASE_URL ortam değişkeni / .env (ör. postgresql://kullanıcı:şifre@host:5432/db).
     Yoksa docker/db.env'deki POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB okunur; sunucu
-    DB_HOST (varsayılan localhost) ve DB_PORT (varsayılan 5432). Böylece şifre tek yerde (db.env) durur.
+    DB_HOST (varsayılan 127.0.0.1) ve DB_PORT (varsayılan 5432). Böylece şifre tek yerde (db.env) durur.
     """
     load_env()
     if url := os.environ.get("DATABASE_URL"):
@@ -72,7 +72,9 @@ def db_settings() -> dict:
     if missing:
         raise ConfigError(f"{DB_ENV_FILE.relative_to(ROOT)}: eksik alan(lar): {', '.join(missing)}")
     return {
-        "host": os.environ.get("DB_HOST", "localhost"),
+        # localhost değil: Windows'ta localhost önce IPv6'ya (::1) gider, compose portu yalnızca 127.0.0.1'de
+        # açtığı için bağlantı zaman aşımına kadar bekler (ölçüm: localhost 10 sn, 127.0.0.1 27 ms)
+        "host": os.environ.get("DB_HOST", "127.0.0.1"),
         "port": int(os.environ.get("DB_PORT", "5432")),
         "user": values["POSTGRES_USER"],
         "password": values["POSTGRES_PASSWORD"],
