@@ -13,8 +13,11 @@ Buradakiler chatbot'u **ölçmek** için: soruları otomatik sorar, cevapları b
 | `retrieval_test.py` | Belgede **arama** doğru bölümü buluyor mu? (Hit@5, MRR) | Hayır, ücretsiz | birkaç saniye |
 | `answer_test.py` | Chatbot'un **cevabı** doğru türde mi, doğru kaynağı gösteriyor mu? | Evet (Gemini) | 67 soru ≈ 5–8 dk |
 | `report.py` | `answer_test.py` sonucundan **mentora gösterilecek rapor** yazar | Hayır | anında |
+| `store_compare_test.py` | FAISS dosyaları ile veritabanı (pgvector) **aynı sonucu** veriyor mu? | Hayır | ~30 sn |
 
-Sıra: önce `answer_test.py`, sonra `report.py`. `retrieval_test.py` bağımsız.
+Sıra: önce `answer_test.py`, sonra `report.py`. `retrieval_test.py` ve `store_compare_test.py` bağımsız.
+
+Arama hangi depodan yapılıyor? `project.json › vectorStore.type`: `"pgvector"` = veritabanı (önce `docker compose up -d`), `"flat"` = FAISS dosyaları. Testler ikisinde de aynı çalışır. `store_compare_test.py` için iki depo da `embed.py` ile üretilmiş olmalı.
 
 ## Nasıl çalıştırılır
 
@@ -25,6 +28,7 @@ $env:PYTHONUTF8=1
 .venv\Scripts\python.exe tests\retrieval_test.py
 .venv\Scripts\python.exe tests\answer_test.py
 .venv\Scripts\python.exe tests\report.py
+.venv\Scripts\python.exe tests\store_compare_test.py
 ```
 
 Birkaç soruyu denemek için: `tests\answer_test.py --only q01,s01`. Sonucu kaydetmeden denemek için: `--no-save`.

@@ -1,12 +1,17 @@
-"""chunks.json → embedding → FAISS indeksi (flat, kesin arama)
+"""chunks.json → embedding → vektör deposu (FAISS dosyaları veya PostgreSQL + pgvector; ikisi de kesin arama)
 
 Kullanım:
     python rag/embed.py                 # .env › PROJECT
     python rag/embed.py --project <id>
 
-Çıktılar (index/<proje-id>/):
-  faiss.index  FAISS IndexFlatIP. Vektör i = index.json › chunks[i]
-  index.json   chunk metinleri + metadata + embedding ve vectorStore ayarları (vektörler faiss.index'te)
+Çıktılar, project.json › vectorStore.type'a göre:
+  "flat" (index/<proje-id>/):
+    faiss.index  FAISS IndexFlatIP. Vektör i = index.json › chunks[i]
+    index.json   chunk metinleri + metadata + embedding ve vectorStore ayarları (vektörler faiss.index'te)
+  "pgvector" (rag/pgstore.py, tablolar rag/schema.sql):
+    rag_indexes  proje satırı (model, boyut, ayarlar)
+    rag_chunks   chunk metni + metadata + embedding + position; eski satırlar silinip tek transaction'da yazılır
+    Veritabanı açık olmalı: docker compose up -d
 
 Neden flat: IndexFlatIP soruyu bütün vektörlerle karşılaştırır (kesin arama, ayar gerektirmez).
 Vektörler normalize olduğu için iç çarpım (IP) = cosine benzerliği. Birkaç bin chunk'a kadar
@@ -21,8 +26,9 @@ Kaydetmeden önce doğrular:
   - chunks.json güncel (chunking ayarları aynı, pages.json'dan eski değil, aynı tokenizer)
   - önek ve özel tokenlar dahil hiçbir chunk modelin token sınırını aşmıyor (aşan sessizce kesilirdi)
   - vektör sayısı = chunk sayısı, NaN yok, her vektörün normu 1
-  - diskten okunan FAISS indeksinin ilk topK sonucu, bellekteki vektörlerle yapılan kesin aramayla aynı
-Doğrulama başarısızsa hiçbir dosya yazılmaz ve hata koduyla çıkılır.
+  - kaydedilen indeksin (diskten okunan FAISS / DB'deki satırlar) ilk topK sonucu, bellekteki vektörlerle
+    yapılan kesin aramayla aynı
+Doğrulama başarısızsa hiçbir şey yazılmaz (DB'de transaction geri alınır) ve hata koduyla çıkılır.
 """
 
 from __future__ import annotations
@@ -41,7 +47,7 @@ from config import ROOT, ConfigError, cli_project
 SCHEMA_VERSION = 2
 NORM_TOLERANCE = 1e-3
 INDEX_FILE = "faiss.index"
-SUPPORTED_TYPES = ("flat",)
+SUPPORTED_TYPES = ("flat", "pgvector")
 
 
 def stale_chunks_reason(project, chunk_data: dict, chunks_file, model: str) -> str | None:
@@ -125,6 +131,22 @@ def main() -> int:
         if n > token_limit:
             errors.append(f"{c['id']}: {n} token > model sınırı {token_limit} (metin kesilirdi).")
 
+    if errors:
+        print(f"\nDoğrulama BAŞARISIZ ({len(errors)} hata), hiçbir şey yazılmadı:", file=sys.stderr)
+        for err in errors[:20]:
+            print(f"  - {err}", file=sys.stderr)
+        return 2
+
+    embedding_info = {
+        "model": model_name,
+        "dimensions": dim,
+        "normalized": True,
+        "passagePrefix": passage_prefix,
+        "queryPrefix": project.get("embedding.queryPrefix"),
+    }
+    if vs_type == "pgvector":
+        return save_pgvector(project, embedding_info, chunk_data, chunks, vectors, top_k, token_counts, token_limit)
+
     # ---- FAISS indeksi: kur, geçici dosyaya kaydet, diskten geri okuyup kontrol et
     out_dir = project.index_dir
     tmp_file = out_dir / (INDEX_FILE + ".tmp")
@@ -156,13 +178,7 @@ def main() -> int:
         "project": project.id,
         "createdAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         # yalnızca vektörü belirleyen alanlar; batchSize gibi çalışma ayarları yazılmaz
-        "embedding": {
-            "model": model_name,
-            "dimensions": dim,
-            "normalized": True,
-            "passagePrefix": passage_prefix,
-            "queryPrefix": project.get("embedding.queryPrefix"),
-        },
+        "embedding": embedding_info,
         "vectorStore": {"type": vs_type, "library": "faiss", "index": "IndexFlatIP", "metric": "inner_product",
                         "file": INDEX_FILE, "count": len(chunks)},
         "chunking": chunk_data["chunking"],
@@ -178,6 +194,31 @@ def main() -> int:
     for name in (INDEX_FILE, "index.json"):
         f = out_dir / name
         print(f"→ {f.relative_to(ROOT)} ({f.stat().st_size / 1e6:.2f} MB)")
+    return 0
+
+
+def save_pgvector(project, embedding_info, chunk_data, chunks, vectors, top_k, token_counts, token_limit) -> int:
+    """Vektörleri PostgreSQL + pgvector'e yazar (rag/pgstore.py). Tek transaction: hata olursa eski indeks kalır."""
+    import pgstore  # psycopg yalnızca bu yolda gerekir
+
+    settings = {"schemaVersion": SCHEMA_VERSION, "embedding": embedding_info, "chunking": chunk_data["chunking"]}
+    try:
+        t0 = time.perf_counter()
+        with pgstore.connect(apply_schema=True) as conn:
+            result = pgstore.write_index(conn, project.id, embedding_info["model"], embedding_info["dimensions"],
+                                         settings, chunks, vectors, top_k)
+        write_sec = time.perf_counter() - t0
+    except ConfigError as e:
+        print(f"\nVeritabanına yazılamadı, eski indeks değişmedi: {e}", file=sys.stderr)
+        return 2
+
+    print("\nDoğrulama: tamam")
+    print(f"  Vektör sayısı = chunk sayısı: {len(vectors)}, boyut {embedding_info['dimensions']}, normalize")
+    print(f"  Önekli token (özel tokenlar dahil): en fazla {max(token_counts)} / {token_limit}")
+    print(f"  PostgreSQL'e yazıldı ve doğrulandı: {write_sec:.1f} sn (tek transaction)")
+    print(f"  DB araması, ilk {top_k} sonuçta kesin aramayla uyumlu ({len(chunks)} sorgu): {result['match']:.3f}"
+          f", en büyük puan farkı {result['max_diff']:.1e}")
+    print(f"→ rag_indexes / rag_chunks (project = '{project.id}', {result['count']} satır)")
     return 0
 
 

@@ -31,7 +31,7 @@
     "passagePrefix": "passage: ",
     "queryPrefix": "query: "
   },
-  "vectorStore": { "type": "flat" },
+  "vectorStore": { "type": "pgvector" },
   "llm":       { "provider": "gemini", "model": "gemini-3.5-flash-lite", "temperature": 0.1 },
   "input":     { "minChars": 3, "maxChars": 1000 },
   "retrieval": { "topK": 5, "minScore": 0.0 },

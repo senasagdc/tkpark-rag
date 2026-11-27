@@ -1,4 +1,4 @@
-"""Retrieval (adım 7, LLM yok): soru → embedding → FAISS → en yakın K chunk.
+"""Retrieval (adım 7, LLM yok): soru → embedding → vektör deposu → en yakın K chunk.
 
 Chatbot bu dosyadaki Retriever'ı kullanır (rag/answer.py). Ölçüm (Hit@K, MRR) burada değil:
 python tests/retrieval_test.py
@@ -7,16 +7,18 @@ Kullanım:
     python rag/search.py "Ortak alanlar nasıl kullanılır?"
     python rag/search.py "soru" --top 10 --project <id>
 
-Okunan dosyalar (index/<proje-id>/):
-    index.json   chunk metinleri + metadata + embedding ayarları (embed.py üretir)
-    faiss.index  vektörler; vektör i = index.json › chunks[i]
+Vektör deposu project.json › vectorStore.type ile seçilir (ikisini de embed.py üretir):
+    "flat"      index/<proje-id>/index.json (chunk'lar) + faiss.index (vektörler; vektör i = chunks[i])
+    "pgvector"  PostgreSQL tabloları rag_indexes + rag_chunks (rag/pgstore.py); docker compose up -d gerekir
+Retriever'ın dışarıya verdikleri (search, chunks, section, title) depodan bağımsızdır;
+answer.py ve tests/ hangi deponun kullanıldığını bilmez.
 
 Ayarlar project.json'dan:
     embedding.model, embedding.queryPrefix
     retrieval.topK      gösterilecek sonuç sayısı (--top ile değiştirilebilir)
     retrieval.minScore  bu puanın altındaki sonuçlar "eşik altı" diye işaretlenir
 
-Puan = cosine benzerliği (vektörler normalize, FAISS IndexFlatIP iç çarpımı).
+Puan = cosine benzerliği (vektörler normalize; FAISS'te iç çarpım, pgvector'de 1 - (embedding <=> soru)).
 """
 
 from __future__ import annotations
@@ -31,30 +33,70 @@ from sentence_transformers import SentenceTransformer
 
 from config import ROOT, ConfigError, load_project
 
-class Retriever:
+class FaissStore:
+    """vectorStore.type = "flat": index.json + faiss.index dosyaları."""
+
     def __init__(self, project):
         index_file = project.index_dir / "index.json"
         if not index_file.exists():
             raise ConfigError(f"Bulunamadı: {index_file.relative_to(ROOT)}. Önce: python rag/embed.py")
         data = json.loads(index_file.read_text(encoding="utf-8"))
-
-        # Soru ve chunk'lar aynı modelle embed edilmeli, yoksa puanlar anlamsız olur.
-        model = project.get("embedding.model")
-        if data["embedding"]["model"] != model:
-            raise ConfigError(
-                f"index.json modeli ({data['embedding']['model']}) project.json ile uyuşmuyor ({model}). "
-                "İndeksi yeniden oluştur: python rag/embed.py"
-            )
-
+        self.where = "index.json"
+        self.model = data["embedding"]["model"]
         self.chunks = data["chunks"]
         self.index = faiss.read_index(str(project.index_dir / data["vectorStore"]["file"]))
+        self.dimensions = self.index.d
         if self.index.ntotal != len(self.chunks):
             raise ConfigError(
                 f"faiss.index'te {self.index.ntotal} vektör, index.json'da {len(self.chunks)} chunk var. "
                 "İndeksi yeniden oluştur: python rag/embed.py"
             )
+
+    def search(self, q: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        return self.index.search(q, self.index.ntotal)
+
+
+class PgStore:
+    """vectorStore.type = "pgvector": PostgreSQL tabloları (rag/pgstore.py). Chunk'lar açılışta bir kez okunur."""
+
+    def __init__(self, project):
+        import pgstore  # psycopg yalnızca bu yolda gerekir
+        self._pg = pgstore
+        self.project_id = project.id
+        self.conn = pgstore.connect()
+        info, self.chunks = pgstore.load_index(self.conn, project.id)
+        self.where = "veritabanı (rag_indexes)"
+        self.model, self.dimensions = info["model"], info["dimensions"]
+
+    def search(self, q: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        return self._pg.search(self.conn, self.project_id, q)
+
+
+STORES = {"flat": FaissStore, "pgvector": PgStore}
+
+
+class Retriever:
+    def __init__(self, project):
+        store_type = project.get("vectorStore.type")
+        if store_type not in STORES:
+            raise ConfigError(f"vectorStore.type {store_type!r} desteklenmiyor. Desteklenenler: {tuple(STORES)}")
+        self.store = STORES[store_type](project)
+
+        # Soru ve chunk'lar aynı modelle embed edilmeli, yoksa puanlar anlamsız olur.
+        model = project.get("embedding.model")
+        if self.store.model != model:
+            raise ConfigError(
+                f"{self.store.where} modeli ({self.store.model}) project.json ile uyuşmuyor ({model}). "
+                "İndeksi yeniden oluştur: python rag/embed.py"
+            )
+        self.chunks = self.store.chunks
         self.query_prefix = project.get("embedding.queryPrefix")
         self.model = SentenceTransformer(model)
+        if self.model.get_embedding_dimension() != self.store.dimensions:
+            raise ConfigError(
+                f"Model {self.model.get_embedding_dimension()} boyutlu vektör üretiyor, {self.store.where} "
+                f"{self.store.dimensions} boyutlu. İndeksi yeniden oluştur: python rag/embed.py"
+            )
 
     def search(self, questions: list[str]) -> tuple[np.ndarray, np.ndarray]:
         """Her soru için TÜM chunk'ları puana göre sıralar → (puanlar, chunk sıra no'ları).
@@ -63,7 +105,7 @@ class Retriever:
         """
         q = self.model.encode([self.query_prefix + s for s in questions],
                               normalize_embeddings=True, convert_to_numpy=True).astype(np.float32)
-        return self.index.search(q, self.index.ntotal)
+        return self.store.search(q)
 
     def section(self, i: int) -> str:
         return self.chunks[i]["metadata"].get("section") or "?"

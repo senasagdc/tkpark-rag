@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parent.parent
 PROJECTS_DIR = ROOT / "projects"
 INDEX_DIR = ROOT / "index"
 ENV_FILE = ROOT / ".env"
+DB_ENV_FILE = ROOT / "docker" / "db.env"  # docker-compose.yml'deki veritabanının kullanıcı/şifre/DB adı
 
 _MISSING = object()
 
@@ -44,6 +45,39 @@ def load_env(path: Path = ENV_FILE) -> None:
         if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
             value = value[1:-1]
         os.environ.setdefault(key, value)
+
+
+def db_settings() -> dict:
+    """Vektör veritabanının (vectorStore.type = "pgvector") bağlantı bilgisi, psycopg.connect(**...) için.
+
+    Öncelik: DATABASE_URL ortam değişkeni / .env (ör. postgresql://kullanıcı:şifre@host:5432/db).
+    Yoksa docker/db.env'deki POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB okunur; sunucu
+    DB_HOST (varsayılan localhost) ve DB_PORT (varsayılan 5432). Böylece şifre tek yerde (db.env) durur.
+    """
+    load_env()
+    if url := os.environ.get("DATABASE_URL"):
+        return {"conninfo": url}
+    if not DB_ENV_FILE.exists():
+        raise ConfigError(
+            f"Veritabanı ayarı yok: .env'de DATABASE_URL tanımlı değil ve {DB_ENV_FILE.relative_to(ROOT)} bulunamadı. "
+            f"Örneği kopyala: {DB_ENV_FILE.relative_to(ROOT)}.example"
+        )
+    values = {}
+    for raw in DB_ENV_FILE.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if line and not line.startswith("#") and "=" in line:
+            key, value = line.split("=", 1)
+            values[key.strip()] = value.strip()
+    missing = [k for k in ("POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB") if not values.get(k)]
+    if missing:
+        raise ConfigError(f"{DB_ENV_FILE.relative_to(ROOT)}: eksik alan(lar): {', '.join(missing)}")
+    return {
+        "host": os.environ.get("DB_HOST", "localhost"),
+        "port": int(os.environ.get("DB_PORT", "5432")),
+        "user": values["POSTGRES_USER"],
+        "password": values["POSTGRES_PASSWORD"],
+        "dbname": values["POSTGRES_DB"],
+    }
 
 
 @dataclass(frozen=True)

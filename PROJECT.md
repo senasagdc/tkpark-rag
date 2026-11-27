@@ -10,7 +10,7 @@
 - **Test kodu ayrıldı (26.11):** ölçüm kodu `rag/`'dan yeni `tests/` klasörüne taşındı (`retrieval_test.py`, `answer_test.py`, `report.py`, açıklaması `tests/README.md`). `rag/` artık yalnızca chatbot'un kendisi. Davranış değişmedi.
 - **Sırada:** Docker (motor artık çalışıyor) ve Streamlit/Gradio arayüzü (ödev). Reranking (adım 8) ödevden sonra; q01/q21/z09 için aday.
 - **Bekleyenler:**
-  - **Docker hazır (26.11):** Sanal Makine Platformu açıldı, motor çalışıyor (`docker info` → 29.9.3, Docker Desktop). Yapılacaklar "Yol haritası › Ara iş"te. 27.11: `hello-world` çalıştı, Docker temel kavramları adım adım öğreniliyor (ders 1: image, container, `run`, `ps -a`, `rm`, `--rm`; ders 2: `-d`, `-p`, `logs`, `exec`, `stop`/`start`; ders 3: volume, `--env-file`). **Veritabanı PostgreSQL + pgvector seçildi** (MySQL bırakıldı, 27.11), container `tkpark-db` 5432'de çalışıyor (volume `tkpark-pg-data`), oyuncak vektörlerle `<=>` doğrulandı. **Compose hazır** (`docker compose up -d`, `(healthy)`), DBeaver kurulu (bağlantı henüz denenmedi, gerekince). **DB işi 5 aşama:** 1 altyapı ✅ · 2 gerçek tablo tasarımı (`vector(768)`) ⬜ sıradaki · 3 `embed.py` DB'ye yazsın ⬜ · 4 `search.py` DB'den sorgulasın ⬜ · 5 `retrieval_test.py` FAISS ile aynı sonuç (Hit@5 10/10, MRR 0.817) ⬜. Python kodu henüz değişmedi, chatbot hâlâ FAISS'le çalışıyor. **Çalışma biçimi (27.11):** komutları kullanıcı kendisi çalıştırıyor, Claude önce anlatıyor ve çıktıyı açıklıyor; uzun/zor yerlerde Claude devralıyor. Kullanıcı tercihi: her Docker adımı çalıştırılmadan önce anlatılacak.
+  - **Docker hazır (26.11):** Sanal Makine Platformu açıldı, motor çalışıyor (`docker info` → 29.9.3, Docker Desktop). Yapılacaklar "Yol haritası › Ara iş"te. 27.11: `hello-world` çalıştı, Docker temel kavramları adım adım öğreniliyor (ders 1: image, container, `run`, `ps -a`, `rm`, `--rm`; ders 2: `-d`, `-p`, `logs`, `exec`, `stop`/`start`; ders 3: volume, `--env-file`). **Veritabanı PostgreSQL + pgvector seçildi** (MySQL bırakıldı, 27.11), container `tkpark-db` 5432'de çalışıyor (volume `tkpark-pg-data`), oyuncak vektörlerle `<=>` doğrulandı. **Compose hazır** (`docker compose up -d`, `(healthy)`), DBeaver kurulu (bağlantı henüz denenmedi, gerekince). **DB işi 5 aşama:** 1 altyapı ✅ · 2 tablo tasarımı ✅ (`rag/schema.sql` → `rag_indexes` + `rag_chunks`, `embedding vector` boyutsuz (A seçeneği; boyutu kod kontrol eder), `position` FAISS sırasını korur) · 3 `embed.py` DB'ye yazıyor ✅ · 4 `search.py` DB'den sorguluyor ✅ · 5 doğrulama ✅ (Hit@5 10/10, MRR 0.817, FAISS'le aynı). **DB ara işi bitti (27.11); chatbot artık pgvector'le çalışıyor** (`vectorStore.type: "pgvector"`; Docker'sız yedek `"flat"`). Dal `feat/docker-pgvector`, `main`'e henüz birleşmedi. Sırada (takvime göre): Streamlit/Gradio arayüzü (ödev). **Çalışma biçimi (27.11):** komutları kullanıcı kendisi çalıştırıyor, Claude önce anlatıyor ve çıktıyı açıklıyor; uzun/zor yerlerde Claude devralıyor. Kullanıcı tercihi: her Docker adımı çalıştırılmadan önce anlatılacak.
   - 7. adımın retrieval testi 26.11'de tekrar çalıştırıldı, sonuç aynı (Hit@5 10/10, MRR 0.817).
   - `feat/1.5-retrieval-test` dalının silinmesi karar bekliyor.
   - Query rewriting ve multi-query reranking'den sonra ölçüme göre değerlendirilecek.
@@ -364,8 +364,8 @@ tkpark-ragagent/
   - [x] pgvector container'ı (27.11): `docker run -d --name tkpark-db --env-file docker/db.env -p 5432:5432 -v tkpark-pg-data:/var/lib/postgresql pgvector/pgvector:0.8.7-pg18`. **Dikkat:** PG 18 image'ında veri klasörü `PGDATA=/var/lib/postgresql/18/docker`, volume `/var/lib/postgresql`'e bağlanır (eski `/var/lib/postgresql/data` değil; `docker image inspect` ile bakıldı). `CREATE EXTENSION vector` (0.8.7) açıldı. Oyuncak tablo `oyuncak` (`vector(3)`, 4 satır): soru `[1, 0.2, 0]` ile `<=>` sıralaması doğru, `1 - (a <=> b)` elle hesaplanan cosine ile aynı (0.9806); yanlış boyut reddediliyor (`expected 3 dimensions, not 2`). Container silinip aynı volume'le açılınca "Skipping initialization", tablo yerinde. `rm -f` PostgreSQL'i düzgün kapatmadığı için açılışta WAL kurtarması yaptı (veri kaybı yok); doğrusu `docker stop` → `docker rm`. Bağlanmak için: `docker exec -it tkpark-db psql -U tkpark -d tkpark`
   - [x] `docker-compose.yml` (27.11): yalnızca `db` servisi. `docker run`'a göre ekler: port `127.0.0.1:5432:5432` (yalnızca bu bilgisayar), `docker/initdb/01-vector.sql` bind mount (`:ro`, yalnızca volume boşken çalışır, `CREATE EXTENSION IF NOT EXISTS vector`), `pg_isready` healthcheck (`(healthy)`), `restart: unless-stopped`, volume `name: tkpark-pg-data` (mevcut volume; ilk `up`'ta "not created by Docker Compose" uyarısı zararsız, `external: true` bilerek konmadı çünkü yeni bilgisayarda volume'ü oluşturmaz). Compose `tkpark-rag-1_default` ağını kendisi açıyor; backend eklenince DB'ye `db:5432` ile ulaşacak. Komutlar: `docker compose up -d`, `ps`, `logs db`, `down` (`down -v` volume'ü siler)
   - [x] DBeaver (27.11, kullanıcı kurdu): PostgreSQL, `localhost:5432`, DB/kullanıcı `tkpark`, şifre `docker/db.env`'den. Gerçek chunk tablosunda yalnızca görüntüleme (tabloyu `embed.py` doldurur)
-  - [ ] Python'dan bağlantı: gerçek tablo (`vector(768)`), `embed.py` yazsın, `search.py` sorgulasın; `oyuncak` tablosu silinecek
-  - [ ] `embed.py` vektörleri DB'ye yazsın, `search.py` DB'den sorgulasın; `project.json › vectorStore.type` ile FAISS / DB seçilsin. Aynı `retrieval.jsonl` ile sonuçların FAISS flat ile aynı çıktığı kontrol edilecek (Hit@5 10/10, MRR 0.817).
+  - [x] Gerçek tablolar (27.11): `rag/schema.sql` (`rag_indexes`, `rag_chunks`, boyutsuz `vector`), `oyuncak` silindi
+  - [x] `embed.py` vektörleri DB'ye yazıyor, `search.py` DB'den sorguluyor (27.11); `project.json › vectorStore.type` = `"pgvector"` (yedek `"flat"`). Sonuçlar: `embed.py` 186 chunk 5.7 sn'de yazıldı, DB araması kesin aramayla 1.000 uyumlu (puan farkı ≤ 6e-7); `tests/retrieval_test.py` pgvector'le **Hit@5 10/10, MRR 0.817** (FAISS'le aynı); `tests/store_compare_test.py` 63 soruda ilk 20 sonuç 63/63 aynı, tam sıralama 62/63 (1 soruda eşit puanlı iki chunk yer değiştirmiş), puan farkı ≤ 3e-7; `answer.py --dry-run` DB'den parça getiriyor; Docker kapalıyken anlaşılır hata (çıkış 1). `answer_test.py` (LLM) DB'yle henüz çalıştırılmadı; retrieval aynı olduğu için sonuç değişmemeli
   - [ ] Sonra compose'a backend ve frontend eklenecek (Part 2–3 ile birlikte).
 - **Part 2 — Web API (Node/Express):** `POST /api/chat`, `GET /api/config` (arayüz metinleri); aktif projenin indeksini okur; açılışta embedding uyumu kontrolü
 - **Part 3 — Arayüz:** HTML/CSS/vanilla JS; başlık, karşılama ve örnek sorular `/api/config`'ten
@@ -383,13 +383,13 @@ Model ve parametreler `project.json`'dan seçildiği için değiştirmek kod de�
 | PDF extraction | PyMuPDF (`pymupdf`) — `rag/loaders/pdf.py` |
 | Chunking | Kendi başlık tespiti + LangChain `RecursiveCharacterTextSplitter` (`langchain-text-splitters`) |
 | Embedding | Yerel `intfloat/multilingual-e5-base`, 768 boyut (`sentence-transformers`) |
-| Vector store | FAISS `IndexFlatIP` (`faiss-cpu`, kesin arama); metin/metadata `index.json`'da. Büyürse `IndexHNSWFlat` |
+| Vector store | **PostgreSQL 18 + pgvector 0.8.7** (Docker, `docker-compose.yml`; Python `psycopg` 3 + `pgvector`), kesin arama, `vectorStore.type: "pgvector"` (27.11'den beri varsayılan). Yedek: FAISS `IndexFlatIP` (`faiss-cpu`), `"flat"`; metin/metadata `index.json`'da. İkisi aynı sonucu veriyor (`tests/store_compare_test.py`). Büyürse pgvector'de HNSW indeksi |
 | Reranker | Aday: `BAAI/bge-reranker-v2-m3` (adım 8, denenmedi) |
 | LLM | Gemini `gemini-3.5-flash-lite` (Python `google-genai` 3.6, Node `@google/genai`); cevap ve yönlendirme (adım 9, soru başına tek çağrı). Ücretsiz plan: dakikada 15 istek |
 | Proje ayarları | `projects/<id>/project.json` (Python ve Node ortak) |
 | Web (Part 2–3) | Node.js 22+, Express 5, HTML/CSS/vanilla JS |
 
-Not: FAISS tek dosyalık yerel bir indeks. Çok büyük veya sık güncellenen projelerde Qdrant, Chroma ya da pgvector gibi sunucu tabanlı bir veritabanına geçilebilir; bu değişiklik Node tarafında yalnızca `retrieval.js`'i etkiler.
+Not: FAISS tek dosyalık yerel bir indeks; pgvector ise Python, ileride Node backend ve DBeaver'ın aynı anda okuyabildiği bir sunucu. Node tarafında depo değişikliği yalnızca `retrieval.js`'i etkiler.
 
 ## Dosyalar
 - `.env.example` — ortam değişkenleri şablonu (`PORT`, `PROJECT`, `GEMINI_API_KEY`); `.env` git'e girmez.
@@ -399,9 +399,14 @@ Not: FAISS tek dosyalık yerel bir indeks. Çok büyük veya sık güncellenen p
 - `rag/loaders/` — `get_loader(type)` kaydı; `pdf.py` (PyMuPDF, `skipPages` uygular, PDF tarihini ISO'ya çevirir).
 - `rag/extract.py` — tüm `sources` → `index/<id>/pages.json` (`pages[]` = `{source, page, text}`; `page` = PDF sayfa sırası).
 - `rag/chunk.py` — `pages.json` → `index/<id>/chunks.json` (`chunks[]` = `{id, text, tokens, metadata}`; `id` = `<proje>-<bölüm>-<sıra>`). Sınırı aşan chunk varsa hata koduyla çıkar.
-- `rag/embed.py` — `chunks.json` → embedding → FAISS → `faiss.index` + `index.json`. Kontroller başarısızsa çıkış kodu 2 ve hiçbir dosya yazılmaz; `chunks.json` eskiyse çıkış kodu 1. İsteğe bağlı `embedding.batchSize` (varsayılan 32).
-- `rag/search.py` — `Retriever` ve tek soru araması (`"soru"`, `--top N`).
+- `rag/embed.py` — `chunks.json` → embedding → `vectorStore.type`'a göre: `"pgvector"` → `rag_indexes` + `rag_chunks` (tek transaction, yazdıktan sonra 186 kesin arama kontrolü; hata olursa geri alınır, eski indeks kalır) ya da `"flat"` → `faiss.index` + `index.json`. Kontroller başarısızsa çıkış kodu 2 ve hiçbir şey yazılmaz; `chunks.json` eskiyse çıkış kodu 1. İsteğe bağlı `embedding.batchSize` (varsayılan 32).
+- `rag/schema.sql` — pgvector tabloları (`rag_indexes`: proje başına model/boyut/ayarlar; `rag_chunks`: metin + `metadata` jsonb + `embedding vector` + `position`). `IF NOT EXISTS`, `embed.py` her çalışmada uygular.
+- `rag/pgstore.py` — veritabanı işleri: `connect`, `write_index` (yaz + doğrula), `load_index`, `search` (`ORDER BY embedding <=> q`, puan `1 - mesafe`). Bağlantı bilgisi `config.db_settings()`.
+- `rag/config.py › db_settings()` — `.env › DATABASE_URL` varsa onu, yoksa `docker/db.env`'deki `POSTGRES_*` değerlerini kullanır (sunucu `DB_HOST`/`DB_PORT`, varsayılan `localhost:5432`). Şifre tek yerde (`db.env`) durur.
+- `rag/search.py` — `Retriever` ve tek soru araması (`"soru"`, `--top N`). İçinde `FaissStore` ve `PgStore`; `vectorStore.type` hangisinin kullanılacağını seçer, dışarıya verilenler (`search`, `chunks`, `section`, `title`) aynı. Açılışta model adı ve vektör boyutu depodakiyle karşılaştırılır.
 - `tests/retrieval_test.py` — retrieval soru seti (`--top N`). Rapor: Hit@1/3/5, MRR, ilk K'ya giremeyenler, grup bazında puan aralıkları ve `minScore` ile ayrım yapılıp yapılamadığı.
+- `tests/store_compare_test.py` — FAISS ve pgvector aynı sonucu veriyor mu (iki depo da önceden üretilmiş olmalı): ilk 1/5/20 aynı mı, 186 chunk'ın tam sıralaması, puan farkı.
+- `docker-compose.yml`, `docker/initdb/01-vector.sql`, `docker/db.env(.example)` — veritabanı container'ı (bkz. "Ara iş").
 - `projects/yonerge/eval/testset.jsonl` — cevap test seti. Her satır `{id, question, expect, sections?, note?}`; `expect` ∈ `geçersiz` / `cevap` / `bilgi_yok` / `sohbet`; `sections` yalnızca kaynak kontrolü yapılacak `cevap` sorularında. Yol `eval.testset` ile değiştirilebilir.
 - `projects/yonerge/prompts/system.md` — cevap prompt'u (adım 9; `{organization}`, `{assistantName}`).
 - `projects/yonerge/prompts/messages.json` — `geçersiz`, `bilgi_yok`, `hata` sabit cevapları (`{organization}` gibi değişkenler doldurulur).
@@ -410,7 +415,7 @@ Not: FAISS tek dosyalık yerel bir indeks. Çok büyük veya sık güncellenen p
 - `tests/report.py` — sonuç JSON'undan Markdown rapor (`eval/reports/`, yol `eval.reportsDir`). `--compare <eski.json>`, `--stdout`. Elle inceleme notlarını `eval/review.jsonl`'dan (yol `eval.review`) okur.
 - `projects/yonerge/eval/review.jsonl` — elle inceleme notları (bkz. 9. adım).
 - Eski routing (`rag/route.py`, `prompts/routing.md`, `eval/routing.jsonl`) 26.11'de silindi; `7fafda0` commit'inde duruyor.
-- `requirements.txt` — `pymupdf`, `sentence-transformers` (PyTorch ile gelir), `langchain-text-splitters`, `faiss-cpu`, `google-genai`. Model (~1.1 GB) ilk kullanımda Hugging Face'ten bir kez indirilir.
+- `requirements.txt` — `pymupdf`, `sentence-transformers` (PyTorch ile gelir), `langchain-text-splitters`, `faiss-cpu`, `google-genai`, `psycopg[binary]`, `pgvector`. Model (~1.1 GB) ilk kullanımda Hugging Face'ten bir kez indirilir. `.venv` `uv` ile kurulu (içinde `pip` yok): `uv pip install --python .venv\Scripts\python.exe -r requirements.txt`.
 - `package.json` — Node tarafı (Part 2'de doldurulacak).
 
 ## Nasıl çalıştırılır
@@ -418,10 +423,13 @@ Not: FAISS tek dosyalık yerel bir indeks. Çok büyük veya sık güncellenen p
 cp .env.example .env               # PROJECT=yonerge ve GEMINI_API_KEY doldur (anahtar answer.py ve tests/answer_test.py için)
 python3 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+pip install -r requirements.txt   # bu bilgisayarda: uv pip install --python .venv\Scripts\python.exe -r requirements.txt
+cp docker/db.env.example docker/db.env   # şifreyi değiştir (yalnızca ilk kez)
+docker compose up -d               # vektör veritabanı (proje klasöründen çalıştır); "docker compose ps" → (healthy)
 python rag/extract.py              # 1   → pages.json  (veya --project yonerge)
 python rag/chunk.py                # 1–2 → chunks.json
-python rag/embed.py                # 3–4 → index.json + faiss.index
+python rag/embed.py                # 3–4 → veritabanı (pgvector) ya da index.json + faiss.index (flat)
+python tests/store_compare_test.py # iki depo da üretildiyse: FAISS = pgvector mi
 python rag/search.py "Ortak alanlar nasıl kullanılır?"   # 6–7 tek soru
 python tests/retrieval_test.py    # 6–7 soru seti deneyi (Hit@K, MRR)
 python rag/answer.py "Firma kabul şartları nelerdir?"   # 9 cevap + kaynaklar
@@ -429,7 +437,7 @@ python rag/answer.py "Merhaba" --dry-run                 # 9 prompt'u göster (a
 python tests/answer_test.py       # 9 cevap test seti (67 soru ~5–8 dk, kota beklemesi olabilir) → eval/results/*.json
 python tests/report.py            # en yeni sonuçtan rapor → eval/reports/*.md
 ```
-Beklenen: `extract.py` → 41 sayfa, 4 atlanan, 37 alınan. `chunk.py` → 96 bölüm, 186 chunk. `embed.py` → `Doğrulama: tamam`. `tests/retrieval_test.py` → Hit@5 10/10.
+Beklenen: `extract.py` → 41 sayfa, 4 atlanan, 37 alınan. `chunk.py` → 96 bölüm, 186 chunk. `embed.py` → `Doğrulama: tamam`. `tests/retrieval_test.py` → Hit@5 10/10, MRR 0.817 (iki depoda da). Docker kapalıyken `"pgvector"` ile "Veritabanına bağlanılamadı … docker compose up -d" hatası çıkar; Docker'sız çalışmak için `project.json › vectorStore.type` = `"flat"`.
 
 ## Yeni proje ekleme (kontrol listesi)
 1. `projects/_template/` → `projects/<yeni-id>/` olarak kopyala.
@@ -495,3 +503,5 @@ Bu boyutta kesin arama daha hızlı ve ayarsız. Ölçüm sırasında `hnswlib`'
 **26.11.2026 — Test kodu `rag/`'dan `tests/`'e ayrıldı:** `search.py --eval` ve `answer.py --eval` ana dosyaları kalabalıklaştırıyordu (yarısına yakını ölçüm koduydu) ve neyin chatbot, neyin ölçüm olduğu karışıyordu. Kural: chatbot'un çalışması için gerekli olmayan kod `rag/`'da durmaz. `tests/retrieval_test.py`, `tests/answer_test.py`, `tests/report.py` (eski `rag/analyze.py`) ve Türkçe açıklama `tests/README.md`. Ölçüm verileri yerinde (`projects/<id>/eval/`). Klasöre `eval/` değil `tests/` dendi, çünkü `projects/<id>/eval/` zaten var. `report.py` en yeni sonucu artık dosya adına değil içindeki `createdAt`'e göre buluyor. API'siz kontrol: retrieval testi aynı sonuç (Hit@5 10/10, MRR 0.817), `--dry-run` çalışıyor, sahte LLM'le test → rapor zinciri çalışıyor.
 
 **27.11.2026 — Vector DB: MySQL yerine PostgreSQL + pgvector:** mentor "önce MySQL, vektör araması yoksa başka DB" demişti. MySQL 9.7.4 (LTS) container'ı açıldı ama mesafe fonksiyonu denenmeden bırakıldı; yani "MySQL'de yok" sonucu ölçülmedi. Gerekçe: Community sürümünde vektör mesafe fonksiyonu belirsizdi (`VECTOR` tipi var, `DISTANCE` HeatWave'e özel biliniyordu), pgvector'de cosine mesafesi (`<=>`) ve ileride gerekirse HNSW indeksi kesin olarak var, Python desteği (`psycopg`, `pgvector`) ve RAG örnekleri yaygın. Image `pgvector/pgvector:0.8.7-pg18`: pgvector'ün en yeni sürümü, PostgreSQL 19 yerine bir yıllık 18 (kararlılık). Resmî `postgres` image'ında pgvector olmadığı için (Dockerfile gerekirdi) pgvector'ün kendi image'ı seçildi. DB ayarları `.env`'den ayrı `docker/db.env`'de, çünkü `.env`'deki Gemini anahtarı container'a girmemeli.
+
+**27.11.2026 — Vektör deposu pgvector'e taşındı (aşama 2–5):** iki tablo: `rag_indexes` (proje başına, `index.json` üst kısmı) ve `rag_chunks` (chunk başına; metin, `metadata` jsonb, `embedding`, `position`). Tek ortak tablo + `project` sütunu, çünkü yeni proje paketi kod değişikliği olmadan aynı tablolara girmeli. `embedding` boyutsuz `vector` (A seçeneği): farklı modelli projeler aynı tabloda durabilir; boyut kontrolünü `embed.py`/`search.py` `rag_indexes.dimensions` ile yapar (bedeli: DB yanlış boyutu kendisi reddetmez; HNSW gerekirse ifade indeksi gerekir; 186 chunk'ta gerek yok). Metadata sütunlara bölünmedi (jsonb), çünkü kaynak türüne göre değişebilir. `position` FAISS'in "vektör i = chunks[i]" sözleşmesini korur; böylece `Retriever`'ın dışarıya verdikleri aynı kaldı ve `answer.py` ile `tests/` değişmedi. `embed.py` tek transaction'da siler-yazar-doğrular (yarım indeks kalmaz). Bağlantı şifresi `docker/db.env`'den okunuyor (`DATABASE_URL` ile ezilebilir); `.env`'e kopyalanmadı. FAISS silinmedi: karşılaştırma (`tests/store_compare_test.py`) ve Docker'sız yedek (`"flat"`). Sonuç FAISS'le aynı: Hit@5 10/10, MRR 0.817.
