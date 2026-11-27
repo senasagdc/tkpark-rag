@@ -6,6 +6,7 @@ kaçıncı sırada geldiğine bakar. Chatbot'un çalışması için gerekli değ
 Kullanım:
     python tests/retrieval_test.py
     python tests/retrieval_test.py --top 10 --project <id>
+    python tests/retrieval_test.py --no-rewrite      # query rewriting kapalı (önce/sonra karşılaştırması)
 
 Soru seti (proje klasörüne göre, yol project.json › eval.retrieval):
     eval/retrieval.jsonl, her satır:
@@ -61,8 +62,10 @@ def run(r: Retriever, items: list[dict], k: int, min_score: float) -> int:
     all_scores, all_ids = r.search([it["question"] for it in items])
     answerable, unanswerable = [], []
 
-    for it, scores, ids in zip(items, all_scores, all_ids):
+    for it, scores, ids, rw in zip(items, all_scores, all_ids, r.last_rewrites):
         print(f"\n[{it['id']}] {it['question']}  ({it.get('difficulty', '')})")
+        if rw:
+            print(f"  yeniden yazıldı: {rw}")
         top = float(scores[0])
         if it["expected"]:
             # beklenen bölümden gelen ilk chunk'ın sırası ve puanı
@@ -112,20 +115,24 @@ def run(r: Retriever, items: list[dict], k: int, min_score: float) -> int:
         else:
             print(f"  Ayrım VAR: cevaplı ≥ {low:.4f} > {name} ≤ {max(tops):.4f}"
                   f" (boşluk {low - max(tops):.4f}) → minScore bu aralıktan seçilebilir.")
-    print(f"Ayarlar: topK={k}, minScore={min_score}")
+    n_rw = sum(1 for rw in r.last_rewrites if rw)
+    print(f"Ayarlar: topK={k}, minScore={min_score}, queryRewrite="
+          + (f"açık ({n_rw}/{len(items)} soru yeniden yazıldı)" if r.rewriter else "kapalı"))
     return 0
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Retrieval testi: arama doğru bölümü buluyor mu (LLM yok).")
     parser.add_argument("--top", type=int, help="gösterilecek sonuç sayısı (varsayılan: retrieval.topK)")
+    parser.add_argument("--no-rewrite", action="store_true", help="query rewriting'i kapat")
     parser.add_argument("--project", help="projects/ altındaki proje klasörü (varsayılan: .env PROJECT)")
     args = parser.parse_args()
     try:
         project = load_project(args.project)
         k = args.top or int(project.get("retrieval.topK"))
         min_score = float(project.get("retrieval.minScore", 0.0))
-        return run(Retriever(project), load_questions(project), k, min_score)
+        r = Retriever(project, rewrite=False if args.no_rewrite else None)
+        return run(r, load_questions(project), k, min_score)
     except ConfigError as e:
         print(f"Ayar hatası: {e}", file=sys.stderr)
         return 1

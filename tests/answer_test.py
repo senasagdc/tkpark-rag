@@ -82,7 +82,7 @@ def save_results(a: Assistant, items: list[dict], results: list, complete: bool)
             "id": it["id"], "question": it["question"], "expect": it["expect"],
             "sections": it.get("sections", []), "note": it.get("note"),
             "type": r["type"], "type_ok": ok, "source_ok": src_ok,
-            "answer": r["answer"], "sources": r["sources"], "detail": r["detail"],
+            "answer": r["answer"], "sources": r["sources"], "detail": r["detail"], "rewrite": r.get("rewrite"),
             "hits": [{"id": h.get("id"), "section": h.get("section"), "score": round(h["score"], 4),
                       "pages": h.get("pages")} for h in r["hits"]],
             "ms": round(r["ms"], 1), "waited_s": r.get("waited_s", 0.0), "retries": r.get("retries", []),
@@ -108,6 +108,8 @@ def run(a: Assistant, items: list[dict], save: bool = True, complete: bool = Tru
         src = "" if src_ok is None else ("  kaynak ✓" if src_ok else "  kaynak ✗")
         print(f"{mark} [{it['id']}] {short(it['question']):<55} beklenen {it['expect']:<9} → {r['type']:<9}"
               f" ({r['ms']:.0f} ms){src}")
+        if r.get("rewrite"):
+            print(f"    arama : + {short(r['rewrite'], 160)}")
         if r["type"] in ("cevap", "sohbet"):
             print(f"    cevap : {short(r['answer'], 160)}")
         if r["sources"]:
@@ -149,7 +151,8 @@ def run(a: Assistant, items: list[dict], save: bool = True, complete: bool = Tru
         print(f"Gecikme (retrieval + LLM): ort {statistics.mean(llm_ms):.0f} ms, medyan {statistics.median(llm_ms):.0f} ms,"
               f" en fazla {max(llm_ms):.0f} ms ({len(llm_ms)} çağrı)")
     print(f"Ayarlar: model={a.model_name}, temperature={a.temperature}, topK={a.top_k},"
-          f" minChars={a.min_chars}, maxChars={a.max_chars}")
+          f" minChars={a.min_chars}, maxChars={a.max_chars},"
+          f" queryRewrite={'açık' if a.retriever.rewriter else 'kapalı'}")
     if save:
         print(f"\nSonuç kaydedildi: {save_results(a, items, results, complete)}")
         print("Rapor için: python tests/report.py")
@@ -160,6 +163,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Cevap testi: chatbot test setine doğru cevap veriyor mu (LLM var).")
     parser.add_argument("--only", help="yalnızca bu id'ler (virgülle)")
     parser.add_argument("--no-save", action="store_true", help="sonucu dosyaya kaydetme")
+    parser.add_argument("--no-rewrite", action="store_true", help="query rewriting'i kapat (önce/sonra ölçümü için)")
     parser.add_argument("--project", help="projects/ altındaki proje klasörü (varsayılan: .env PROJECT)")
     args = parser.parse_args()
     try:
@@ -169,7 +173,7 @@ def main() -> int:
         if args.only:
             wanted = set(args.only.split(","))
             items = [it for it in items if it["id"] in wanted]
-        a = Assistant(project, max_wait=MAX_WAIT)
+        a = Assistant(project, max_wait=MAX_WAIT, rewrite=False if args.no_rewrite else None)
         return run(a, items, save=not args.no_save, complete=len(items) == total)
     except ConfigError as e:
         print(f"Ayar hatası: {e}", file=sys.stderr)

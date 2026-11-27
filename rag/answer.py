@@ -19,6 +19,7 @@ Test seti ve ölçüm burada değil: python tests/answer_test.py (bkz. tests/REA
 Ayarlar project.json'dan:
     input.minChars / input.maxChars   girdi kontrolü sınırları
     retrieval.topK                    LLM'e verilen parça sayısı
+    queryRewrite.*                    kural listesiyle soruyu belgenin diline yaklaştırma (rag/rewrite.py)
     llm.model, llm.temperature
     prompts.system                    sistem prompt'u ({organization}, {assistantName} ... prompts.vars'tan)
     prompts.messages                  "geçersiz", "bilgi_yok", "hata" sabit metinleri
@@ -84,7 +85,7 @@ def short(text: str, width: int = 60) -> str:
 
 
 class Assistant:
-    def __init__(self, project, max_wait: float = MAX_WAIT_LIVE, dry_run: bool = False):
+    def __init__(self, project, max_wait: float = MAX_WAIT_LIVE, dry_run: bool = False, rewrite: bool | None = None):
         self.max_wait = max_wait
         self.dry_run = dry_run
         self.min_chars = int(project.get("input.minChars"))
@@ -104,7 +105,7 @@ class Assistant:
         self.messages = {k: fill(v, values) for k, v in messages.items()}
 
         from search import Retriever  # embedding modeli yükleniyor (birkaç saniye)
-        self.retriever = Retriever(project)
+        self.retriever = Retriever(project, rewrite=rewrite)
 
         self.client = None
         if not dry_run:
@@ -196,7 +197,7 @@ class Assistant:
         self.waited = 0.0
         self.retries = []
         text = (question or "").strip()
-        result = {"type": None, "answer": None, "sources": [], "hits": [], "detail": None}
+        result = {"type": None, "answer": None, "sources": [], "hits": [], "detail": None, "rewrite": None}
 
         reason = self.check_input(text)
         if reason:
@@ -204,6 +205,7 @@ class Assistant:
         else:
             hits = self.retrieve(text)
             result["hits"] = hits
+            result["rewrite"] = self.retriever.last_rewrites[0]  # aramada kullanılan ikinci soru (yoksa None)
             prompt = self.build_prompt(text, hits)
             if self.dry_run:
                 result.update(type="dry_run", answer=prompt)
@@ -237,6 +239,7 @@ class Assistant:
         return {"model": self.model_name, "temperature": self.temperature, "topK": self.top_k,
                 "minChars": self.min_chars, "maxChars": self.max_chars,
                 "embedding": self.embedding_model, "vectorStore": self.project.get("vectorStore.type"),
+                **self.retriever.settings(),
                 "systemPromptSha1": hashlib.sha1(self.system.encode("utf-8")).hexdigest()[:12]}
 
 

@@ -35,6 +35,14 @@
   "llm":       { "provider": "gemini", "model": "gemini-3.5-flash-lite", "temperature": 0.1 },
   "input":     { "minChars": 3, "maxChars": 1000 },
   "retrieval": { "topK": 5, "minScore": 0.0 },
+  "queryRewrite": {
+    "enabled": true,
+    "rules": [
+      { "match": ["firma"], "replace": "Girişimci" },
+      { "match": ["teknopark"], "replace": "Bölge" },
+      { "match": ["uymaz", "ihlal", "ceza"], "replace": "aykırı faaliyet" }
+    ]
+  },
 
   "prompts": {
     "system": "prompts/system.md",

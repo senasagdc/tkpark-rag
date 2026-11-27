@@ -8,7 +8,11 @@
 - **Test seti genişletildi (26.11):** 32 → 67 soru; belgenin 21 ana bölümünün hepsinde en az bir `cevap` sorusu var (önce 6 bölüm). u02 → `cevap`, z02 → `bilgi_yok` düzeltildi; yeni x/u/k/s/g/z soruları eklendi.
 - **İkinci LLM testi (26.11, 67 soru, `eval/results/cevaplar2.json`):** otomatik 66/67, inceleme sonrası 67/67 (u06 etiket hatası, düzeltildi), kaynak 30/31. Eksik/yanlış cevap: q01, q21, z09; üçü de **retrieval** kaynaklı (doğru parça LLM'e gitmedi). Ayrıntı 9. adımda.
 - **Test kodu ayrıldı (26.11):** ölçüm kodu `rag/`'dan yeni `tests/` klasörüne taşındı (`retrieval_test.py`, `answer_test.py`, `report.py`, açıklaması `tests/README.md`). `rag/` artık yalnızca chatbot'un kendisi. Davranış değişmedi.
-- **Sırada:** Docker (motor artık çalışıyor) ve Streamlit/Gradio arayüzü (ödev). Reranking (adım 8) ödevden sonra; q01/q21/z09 için aday.
+- **Son biten (27.11):** reranking (adım 8) denendi ve çıkarıldı. bge-reranker-v2-m3 ve gte-multilingual-reranker-base, 50 aday, CPU: MRR 0.817 → 0.840 / 0.850, Hit@1 7 → 8, ama soru başına ~32 / ~98 sn; bge q01'i 3.'den 15.'ye düşürdü. Kalan hatalar sıralama değil kelime uyuşmazlığı. Ayrıntı 8. adımda.
+- **Son biten (27.11, akşam): query rewriting (kural listesi) kodlandı ve LLM'siz ölçüldü, karar bekliyor.** `rag/rewrite.py` + `project.json › queryRewrite` (3 kural: firma → Girişimci, teknopark → Bölge, uymaz/ihlal/ceza → aykırı faaliyet). Kural uyan soruda ikinci bir soru üretilip onunla da aranıyor. Kodda şu an **RRF** birleştirmesi var ve bu en kötü sonuç veren yöntem çıktı (q01 3. → 6.). En iyi görünen "**yalnızca yeni soru**" (C): cevaplı 32 soruda MRR 0.808 → 0.825, Hit@1 23 → 24, Hit@5 31 → 31 (q21 9. → 2. girdi, q24 2. → 7. çıktı). Ayrıntı 5. adımda ("Query rewriting deneyi").
+- **Bekleyen karar (kullanıcı, "sonra bakacağız"):** birleştirme yöntemi: RRF / B en yüksek cosine / C yalnızca yeni soru / rewriting'i kaldırmak. Seçildikten sonra: kod buna göre değiştirilir (RRF değilse `search.py › Retriever.search`), `tests/retrieval_test.py` ve `tests/answer_test.py` + `tests/report.py --compare eval/results/answer-20261127-153718.json` ile ölçülür. Uçtan uca LLM testi henüz yapılmadı.
+- **Sonra (ölçüme göre):** multi-query (z09, tek mesajda iki soru), İngilizce sorular (z08, z02); sparse/hybrid retrieval yalnızca doğru parça büyük havuzda bile yoksa. Ödev şimdilik bekletiliyor (kullanıcı, 27.11).
+- **Repo (27.11):** reranking kaydı ve query rewriting kodu `feat/docker-pgvector` dalına commit edildi (push edilmedi, `main`'e birleşmedi). `eval/reports/` altında kullanıcının yeniden adlandırdığı raporlar (`ilk_test.md`, `vectordb_sonrasi_test.md`; eski adları silinmiş görünüyor) commit'e girmedi.
 - **Bekleyenler:**
   - **Docker hazır (26.11):** Sanal Makine Platformu açıldı, motor çalışıyor (`docker info` → 29.9.3, Docker Desktop). Yapılacaklar "Yol haritası › Ara iş"te. 27.11: `hello-world` çalıştı, Docker temel kavramları adım adım öğreniliyor (ders 1: image, container, `run`, `ps -a`, `rm`, `--rm`; ders 2: `-d`, `-p`, `logs`, `exec`, `stop`/`start`; ders 3: volume, `--env-file`). **Veritabanı PostgreSQL + pgvector seçildi** (MySQL bırakıldı, 27.11), container `tkpark-db` 5432'de çalışıyor (volume `tkpark-pg-data`), oyuncak vektörlerle `<=>` doğrulandı. **Compose hazır** (`docker compose up -d`, `(healthy)`), DBeaver kurulu (bağlantı henüz denenmedi, gerekince). **DB işi 5 aşama:** 1 altyapı ✅ · 2 tablo tasarımı ✅ (`rag/schema.sql` → `rag_indexes` + `rag_chunks`, `embedding vector` boyutsuz (A seçeneği; boyutu kod kontrol eder), `position` FAISS sırasını korur) · 3 `embed.py` DB'ye yazıyor ✅ · 4 `search.py` DB'den sorguluyor ✅ · 5 doğrulama ✅ (Hit@5 10/10, MRR 0.817, FAISS'le aynı). **DB ara işi bitti (27.11); chatbot artık pgvector'le çalışıyor** (`vectorStore.type: "pgvector"`; Docker'sız yedek `"flat"`). Dal `feat/docker-pgvector`, `main`'e henüz birleşmedi. Sırada (takvime göre): Streamlit/Gradio arayüzü (ödev). **Çalışma biçimi (27.11):** komutları kullanıcı kendisi çalıştırıyor, Claude önce anlatıyor ve çıktıyı açıklıyor; uzun/zor yerlerde Claude devralıyor. Kullanıcı tercihi: her Docker adımı çalıştırılmadan önce anlatılacak.
   - 7. adımın retrieval testi 26.11'de tekrar çalıştırıldı, sonuç aynı (Hit@5 10/10, MRR 0.817).
@@ -28,10 +32,10 @@ Proje 9 adımlık RAG akışına göre ilerliyor. **1–4 ve 6 tamam, 7 (retriev
 | 2 | Chunking | ✅ | `chunk.py` | Başlığa göre bölme + `RecursiveCharacterTextSplitter`; 300 token / 50 overlap; 186 chunk |
 | 3 | Embedding | ✅ | `embed.py` | `multilingual-e5-base`, 768 boyut, `passage:` öneki, normalize |
 | 4 | Vector DB | ✅ | `embed.py` → `faiss.index` | FAISS `IndexFlatIP` (kesin arama) |
-| 5 | Query processing | 🔶 | `answer.py › check_input` | Ayrı routing kaldırıldı (26.11), yönlendirme 9'da prompt ile. Girdi kontrolü (kural) var. Rewriting ve multi-query sonra |
+| 5 | Query processing | 🔶 | `answer.py › check_input`, `rewrite.py`, `search.py` | Ayrı routing kaldırıldı (26.11), yönlendirme 9'da prompt ile. Girdi kontrolü (kural) var. Query rewriting (kural listesi) 27.11'de yazıldı, birleştirme yöntemi karar bekliyor. Multi-query sonra |
 | 6 | Query embedding | ✅ | `search.py` | Aynı model, `query:` öneki, normalize |
 | 7 | Retrieval | 🔶 | `search.py`, `tests/retrieval_test.py`, `eval/retrieval.jsonl` | Top-5; Hit@5 10/10, Hit@1 7/10, MRR 0.817; `minScore` 0.0; reranking'den önce test tekrarlanacak |
-| 8 | Reranking | ⬜ | — | Plan: cross-encoder ile ilk ~20 sonucu yeniden sırala |
+| 8 | Reranking | ❌ | — | 27.11 denendi (bge-reranker-v2-m3, gte-multilingual-reranker-base): MRR 0.817 → 0.84–0.85, ama CPU'da soru başına 32–98 sn; çıkarıldı |
 | 9 | Prompt oluşturma | 🔶 | `prompts/system.md`, `answer.py` | system prompt + numaralı chunk'lar (bölüm, sayfa) + soru; sohbet / konu dışı / "bilgim yok" kararı burada. LLM testi bekliyor |
 | → | LLM cevabı, kaynak gösterme, değerlendirme | 🔶 | `answer.py`, `tests/answer_test.py`, `eval/testset.jsonl` | 67 soruda 66/67 (inceleme sonrası 67/67), kaynak 30/31; kalan hatalar retrieval kaynaklı |
 
@@ -73,10 +77,41 @@ Proje 9 adımlık RAG akışına göre ilerliyor. **1–4 ve 6 tamam, 7 (retriev
   - Bedeli: soru başına ek bir LLM çağrısı (ortalama ~870 ms, en fazla 2.3 sn) ve ücretsiz kotanın yarısı.
   - Neden kaldırıldı: `routing.scope` tek bir belgeyi tek cümleyle anlatıyor. Çok belgede bu cümle ya eksik kalır (geçerli sorular reddedilir) ya da sürekli elle güncellenir; yani ölçeklenmez. Ayrıca 9. adımdaki "bilgim yok" kuralı konu dışı soruları zaten karşılıyor.
   - Embedding ile sınıflandırma ve retrieval puan eşiği daha önce elenmişti (örnek cümlelere bağlılık; konu dışı 0.76–0.78, cevaplı 0.80–0.86, fark 0.02).
-- **Sonra (reranking'den sonra, ölçüme göre):**
-  - **Query rewriting:** soruyu belgenin diline çevirme, ör. "teknopark" → "Bölge", "firma" → "Girişimci". Eski plandaki eş anlamlı listesi bunun içinde değerlendirilecek.
-  - **Multi-query:** soruyu birkaç farklı biçimde yazıp sonuçları birleştirme.
-  - Hit@5 zaten 10/10 olduğu için kazanç Hit@1 ve MRR'de aranacak. Reranking aynı metrikleri hedeflediği için önce onun etkisi görülecek.
+- **Query rewriting deneyi (27.11, kural listesi) 🔶 karar bekliyor:**
+  - **Neden:** kalan retrieval hataları kelime uyuşmazlığı. Kullanıcı "firma" diyor, belge "Girişimci" diyor (belgede "firma" 7, "Girişimci" 552 kez); "teknopark" 41, "Bölge" 477; q21'in cevabı 17. bölüm "AYKIRI FAALİYET UYGULAMA YETKİSİ", soruda ise "kurallarına uymazsam" var ("ihlal" 4, "ceza" 6 kez geçiyor). Reranking bunu çözmedi (8. adım).
+  - **Seçenekler ve seçim (kullanıcı):** LLM ile yeniden yazma (soru başına ek Gemini çağrısı, ücretsiz planda dakikada ~7 soru) yerine **kural listesi** seçildi: ücretsiz, anında, deterministik. Bedeli: İngilizce soruya ve z09'a (tek mesajda iki soru) yaramaz, liste proje başına elle yazılır. Aramada **orijinal + yeni soru** birlikte kullanılsın dendi (yeniden yazma kötüyse orijinalin bulduğu parçalar kaybolmasın diye).
+  - **Kurallar (`project.json › queryRewrite.rules`):** `firma` → `Girişimci`, `teknopark` → `Bölge`, `uymaz` / `ihlal` / `ceza` → `aykırı faaliyet`. İlk ikisi `system.md`'de zaten tanımlı belge terimleri. **`şirket` → `Girişimci` bilerek konmadı:** belgede "şirket" 391 kez geçiyor, 376'sı "Yönetici Şirket" (işletmeci); eşleme Yönetici Şirket sorularını bozardı.
+  - **Nasıl çalışıyor (`rag/rewrite.py`):** her kural kelime başından eşleşir, büyük/küçük harf fark etmez, ek de kapsanır ("Teknoparktan", "firmanın", "İhlal"); eşleşen kelimenin tamamı yerine geçer. Hiçbir kural uymazsa soru değişmez ve arama eskisiyle birebir aynı. Üretilen cümle dil bilgisi açısından bozuk olabilir ("Bölge ayrılmak istersem…"); amaç düzgün cümle değil belgenin kelimesini aramaya katmak. Örnekler: "Firma kabul şartları nelerdir?" → "Girişimci kabul şartları nelerdir?", "Yönerge kurallarına uymazsam ne olur?" → "Yönerge kurallarına aykırı faaliyet ne olur?", "Bakanlık teknoparktaki firmaları denetleyebilir mi?" → "Bakanlık Bölge Girişimci denetleyebilir mi?".
+  - **Kodda şu an (`rag/search.py › Retriever.search`):** soru yeniden yazıldıysa iki soru da embed edilip aranır (~15 ms ek), iki sıralama **RRF** ile birleştirilir (`rrf_merge`, her chunk 1 / (60 + sıra) toplar); gösterilen puan chunk'ın iki aramadaki en yüksek cosine'i (rapordaki puan aralıkları eskisiyle karşılaştırılabilsin diye). `Retriever(project, rewrite=None/True/False)`, testlerde `--no-rewrite`. `answer.py` sonucunda `rewrite` alanı (aramada kullanılan ikinci soru), `settings()`'te `queryRewrite`.
+  - **Ölçüm 1, `tests/retrieval_test.py` (RRF, 16 soru, 4'ü yeniden yazıldı: q01, q05, q10, u03):** Hit@1 7 → 8/10, Hit@3 10 → 9, Hit@5 10 → **9**/10, MRR 0.817 → 0.850. q05 2. → 1., ama **q01 3. → 6.** (ilk 5'ten çıktı). Konu dışı/cevapsız puan ayrımı değişmedi (boşluk 0.02; u02, u03 ayrılamıyor).
+  - **Neden RRF q01'i bozdu:** yeni soru tek başına daha iyi; 10.1 parçaları orijinal soruda 3./31./33. sırada, yeni soruda 3./6./15. sırada (10.1-1 komisyon kabulü 3., 10.1-0 online başvuru 6.). RRF iki listede de orta sıralarda olan parçaları (15.1-0, 3-7) öne çıkarıyor, yalnızca tek listede yüksekte olan doğru parçayı geri itiyor.
+  - **Ölçüm 2, birleştirme yöntemleri karşılaştırması (LLM yok, geçici betikle; testset.jsonl'daki `sections`'ı olan 32 soru, 7'si yeniden yazıldı):**
+
+    | Yöntem | retrieval.jsonl (10) Hit@1 / Hit@5 / MRR | testset.jsonl (32) Hit@1 / Hit@5 / MRR |
+    |---|---|---|
+    | A. Rewriting yok | 7 / 10 / 0.817 | 23 / 31 / 0.808 |
+    | RRF (kodda olan) | 8 / 9 / 0.850 | 24 / 30 / 0.820 |
+    | B. En yüksek cosine (chunk'ın iki aramadaki en yüksek puanı) | 8 / 10 / 0.867 | 24 / 30 / 0.814 |
+    | C. Yalnızca yeni soru (kural uyduysa orijinal aramaya katılmaz) | 8 / 10 / 0.867 | **24 / 31 / 0.825** |
+
+    | Yeniden yazılan soru | A | RRF | B | C |
+    |---|---|---|---|---|
+    | q01 Firma kabul şartları | 3 | 6 | 3 | 3 |
+    | q05 Teknoparktan ayrılma bildirimi | 2 | 1 | 1 | 1 |
+    | q10 Öğretim üyeleri | 1 | 1 | 1 | 1 |
+    | q15 Yönetim kurulu kaç kişi | 1 | 1 | 1 | 1 |
+    | q16 Yerleşkeler | 1 | 1 | 1 | 1 |
+    | **q21 Kurallara uymazsam** | 9 | 6 | 7 | **2** |
+    | **q24 Bakanlık denetimi** | 2 | 2 | 7 | **7** |
+
+  - **Yorum:** C en iyi görünüyor; q21 ilk kez ilk 5'e girdi ve q01'de 10.1'in ikinci bir parçası (online başvuru) 31. → 6. sıraya geldi. Ama q24 bozuldu: iki kelime birden değişince ("teknoparktaki firmaları" → "Bölge Girişimci") soru anlamını yitirdi ve orijinal soru aramada olmadığı için telafi edilemedi (kural listesinin bilinen riski). B'de de q24 7. sıraya düştü. Net kazanç küçük: 32 soruda +1 Hit@1, ilk 5'te değişim yok (C'de q21 girdi, q24 çıktı).
+  - **Dikkat (iyimserlik):** kurallar q01/q21 hataları bilinerek seçildi; sonuç test setine göre ayarlanmış olabilir. Gerçek sorularda kazanç daha az olabilir. Kural sayısı ve yeniden yazılan soru az (32'de 7).
+  - **Bekleyen karar:** RRF / B / C / rewriting'i kaldırmak. Olası iyileştirmeler (denenmedi): C'de bir soruda birden çok kural uyunca yalnızca birini uygulamak; C + orijinal soruyu düşük ağırlıkla katmak (ağırlıklı RRF).
+  - **Ölçüm komutları:** `python tests/retrieval_test.py` ve `--no-rewrite`; uçtan uca `python tests/answer_test.py` → `python tests/report.py --compare eval/results/answer-20261127-153718.json` (önceki: pgvector, rewriting yok, tür 67/67, kaynak 31/32). Ölçüm 2'deki betik projede değil (geçiciydi); karar sonrası gerekirse `tests/`'e eklenebilir.
+- **Sonra (ölçüme göre):**
+  - **Multi-query:** soruyu birkaç parçaya/biçime bölüp sonuçları birleştirme (z09: tek mesajda iki soru). LLM gerektirir.
+  - **İngilizce sorular:** kural listesi yardım etmez; LLM ile rewriting veya multi-query'de ele alınır.
+  - Hit@5 zaten 31/32 olduğu için kazanç Hit@1 ve MRR'de, bir de LLM'e giden parçaların kapsamında (q01'in 3 parçası) aranır.
 
 ### 6. Query embedding ✅
 - `search.py`: soru, chunk'larla aynı modelle (`embedding.model`) `query:` önekiyle ve normalize edilerek embed ediliyor.
@@ -117,10 +152,25 @@ Proje 9 adımlık RAG akışına göre ilerliyor. **1–4 ve 6 tamam, 7 (retriev
   - Cevapsızlardan u02 (0.835) ve u03 (0.859) cevaplı sorulardan **ayrılamıyor**; bunları LLM'in "bilgim yok" demesi yakalamalı.
 - **`minScore` kararı (24.11): 0.0.** Boşluk çok dar olduğu için puan eşiği kullanılmıyor. Konu dışı ve cevapsız soruları 9. adımdaki cevap prompt'u ("bilgim yok" kuralı) yakalar (26.11'e kadar konu dışı soruları ayrı routing yakalıyordu). (Elenen seçenek: ~0.79 eşikle konu dışı soruları baştan elemek.)
 
-### 8. Reranking ⬜
-- **Neden:** Hit@1 %70 ve ilk sonuçların puanları birbirine çok yakın (ör. q01'de 0.827 / 0.826 / 0.825).
-- **Plan:** FAISS'ten ilk ~20 sonucu al, soru ile metni birlikte okuyan bir cross-encoder ile yeniden sırala, ilk 5'i kullan. Türkçe destekleyen aday: `BAAI/bge-reranker-v2-m3` (henüz denenmedi).
-- **Ölçüm:** aynı `retrieval.jsonl` ile Hit@1 ve MRR'nin önceki ve sonraki değerleri karşılaştırılacak. Cevapsız soruları ayırmaya katkısı da ayrıca ölçülecek.
+### 8. Reranking ❌ (27.11 denendi, kullanılmıyor)
+- **Neden denendi:** Hit@1 %70 ve ilk sonuçların puanları birbirine çok yakın (ör. q01'de 0.827 / 0.826 / 0.825).
+- **Deney (27.11):** dense aramadan (e5-base + pgvector) ilk 50 aday → cross-encoder (`sentence-transformers` `CrossEncoder`, `max_length` 512) → ilk 5. `project.json › rerank` ile açılıp kapanıyordu. Ölçüm `tests/retrieval_test.py` (16 soru, 10 cevaplı), CPU (Ryzen 7 7730U, GPU yok). Uçtan uca LLM testi yapılmadı.
+
+  | Metrik | Reranking yok | `BAAI/bge-reranker-v2-m3` (568M) | `Alibaba-NLP/gte-multilingual-reranker-base` (306M) |
+  |---|---|---|---|
+  | Hit@1 / Hit@3 / Hit@5 | 7 / 10 / 10 | 8 / 9 / 9 | 8 / 8 / 10 |
+  | MRR | 0.817 | 0.840 | 0.850 |
+  | Soru başına ek süre | ~0 | ~32 sn | ~98 sn (sebebi araştırılmadı) |
+  | Disk / RAM | — | 2.2 GB / süreç ~4.2 GB | 0.6 GB / ölçülmedi |
+  | Konu dışı ↔ cevaplı puan boşluğu | 0.02 (cosine) | 0.023 | 0.31 |
+
+  - Değişenler (doğru bölümün sırası, önce → bge / gte): q01 3 → 15 / 4, q04 1 → 3 / 1, q05 2 → 1 / 1, q08 3 → 1 / 4; diğer 6 soru hep 1.
+  - bge q01'de 50 adayın hepsine ~0.02 verdi (hiçbirini ilgili bulmadı); "firma" ↔ "Girişimci" eşleşmesini yapamıyor.
+  - Modeller: ikisi de çok dilli (gte README'sinde `tr` var), Apache-2.0; gte `transformers` ≥ 5.18'de `trust_remote_code` gerektirmiyor.
+- **Neden işe yaramadı:** Hit@5 zaten 10/10, iyileşecek yer yalnızca Hit@1'di. Kalan hatalar (q01, q21, z09) sıralama değil kelime uyuşmazlığı ("firma" ↔ "Girişimci", "kural ihlali" ↔ yaptırım) ve tek mesajda iki soru; cross-encoder parçaları tek tek puanlar, soruyu bölemez. Modeller web arama verisiyle eğitilmiş, alan Türkçe yönetmelik. Test seti küçük (bir soru = %10). CPU'da cross-encoder 50 çifti baştan okuduğu için pahalı.
+- **Karar (27.11, kullanıcı):** reranker çıkarıldı (kod geri alındı, `project.json`'da `rerank` yok). Sırada query rewriting.
+- **Aday havuzu notu (27.11, dense sırası):** q21'de 17. bölüm 9./13./17. sırada, z09'da 5.4 17. sırada, q01'de 10.1'in diğer parçaları 28./31./33. sırada.
+- **Sparse / hybrid retrieval (BM25 + dense) kararı (27.11):** ölçüme göre, ileride. Reranker yalnızca havuzdakini yeniden sıralar; sparse ise havuza giremeyen parçayı getirmek için (anahtar kelime, sayı, kanun adı). Doğru parça büyük havuzda bile yoksa eklenir. Türkçe ekler BM25'i zayıflatır (kira/kirası/kiranın), kök bulma gerekir; PostgreSQL'in yerleşik `turkish` tam metin araması (`tsvector`, snowball) aynı veritabanında hybrid'e izin verir, sonuçlar RRF ile birleştirilir. İngilizce soruda (diller arası) sparse yardım etmez.
 
 ### 9. Prompt oluşturma + LLM cevabı 🔶 (yazıldı 26.11, LLM testi bekliyor)
 - **Kullanım:** `python rag/answer.py "soru"` (tek soru), `--dry-run` (LLM'e gitmeden prompt'u yazdırır, anahtar gerekmez). Test seti: `python tests/answer_test.py` (`--only q01,s01` seçili sorular). Kod: `Assistant(project).answer(soru)` → `{type, answer, sources, hits, detail, ms}`.
@@ -229,7 +279,8 @@ tkpark-ragagent/
 │   ├── loaders/                   # pdf.py (PyMuPDF) — ileride docx.py, html.py…
 │   ├── chunk.py                   # 1–2 → index/<id>/chunks.json
 │   ├── embed.py                   # 3–4 → index/<id>/index.json + faiss.index
-│   ├── search.py                  # 6–7 → retrieval (Retriever)
+│   ├── rewrite.py                 # 5 → query rewriting (kural listesi, queryRewrite)
+│   ├── search.py                  # 6–7 → retrieval (Retriever; rewriting varsa iki arama + birleştirme)
 │   └── answer.py                  # 5 (girdi kontrolü) + 9 → uçtan uca cevap + kaynaklar
 ├── tests/                         # ölçüm — chatbot için gerekli değil (README.md'de açıklama)
 │   ├── retrieval_test.py          # arama doğru bölümü buluyor mu (Hit@K, MRR), LLM yok
@@ -282,6 +333,14 @@ tkpark-ragagent/
   "llm":       { "provider": "gemini", "model": "gemini-3.5-flash-lite", "temperature": 0.1 },
   "input":     { "minChars": 3, "maxChars": 1000 },
   "retrieval": { "topK": 5, "minScore": 0.0 },
+  "queryRewrite": {
+    "enabled": true,
+    "rules": [
+      { "match": ["firma"], "replace": "Girişimci" },
+      { "match": ["teknopark"], "replace": "Bölge" },
+      { "match": ["uymaz", "ihlal", "ceza"], "replace": "aykırı faaliyet" }
+    ]
+  },
 
   "prompts": {
     "system": "prompts/system.md",
@@ -302,6 +361,7 @@ tkpark-ragagent/
 - `maxTokens` / `overlap` token cinsinden, embedding modelinin tokenizer'ıyla sayılır (başlık yolu dahil, önek ve özel tokenlar hariç).
 - `input.minChars` / `input.maxChars`: girdi kontrolünün sınırları (26.11'e kadar `routing` altındaydı; `routing.scope` routing ile birlikte kaldırıldı).
 - `minScore`: 0.0 (adım 7 kararı). Konu dışı soruları 9. adımdaki cevap prompt'u yakalar.
+- `queryRewrite` (27.11, isteğe bağlı; yoksa kapalı): `match` kelime başları (ek ve büyük/küçük harf kapsanır), eşleşen kelime `replace` ile değişir. Terimler projeye özel; çekirdekte kelime yok. Bkz. 5. adım.
 - Soru seti yolu isteğe bağlı olarak `eval.retrieval` ile değiştirilebilir (varsayılan `eval/retrieval.jsonl`).
 
 ## `index.json` + `faiss.index` sözleşmesi
@@ -346,8 +406,8 @@ tkpark-ragagent/
   - [x] 5 Query processing: ayrı routing kaldırıldı (26.11; LLM routing denemesi 32/32 idi), yönlendirme 9'da prompt ile; girdi kontrolü `answer.py`'de
   - [x] 6 Query embedding
   - [ ] 7 Retrieval (deney tamam, Hit@5 10/10; `minScore` 0.0; commit edildi; reranking'den önce test tekrarlanacak)
-  - [ ] 8 Reranking (cross-encoder, aynı soru setiyle ölç)
-  - [ ] 5+ Query rewriting / multi-query (reranking'den sonra, ölçüme göre)
+  - [x] 8 Reranking: denendi, kullanılmıyor (27.11; kazanç küçük, CPU'da çok yavaş)
+  - [ ] 5+ Query rewriting (kural listesi yazıldı ve ölçüldü 27.11; birleştirme yöntemi karar bekliyor) / multi-query (sonra)
   - [ ] 9 Prompt oluşturma (sohbet / konu dışı / "bilgim yok" kuralları dahil) — yazıldı, LLM testi bekliyor
   - [ ] LLM cevabı + backend'de üretilen kaynaklar — yazıldı (`answer.py`), LLM testi bekliyor
   - [x] Cevap değerlendirme seti ve scripti — `testset.jsonl` (67) + `tests/answer_test.py` + `tests/report.py`; 66/67
@@ -384,7 +444,7 @@ Model ve parametreler `project.json`'dan seçildiği için değiştirmek kod de�
 | Chunking | Kendi başlık tespiti + LangChain `RecursiveCharacterTextSplitter` (`langchain-text-splitters`) |
 | Embedding | Yerel `intfloat/multilingual-e5-base`, 768 boyut (`sentence-transformers`) |
 | Vector store | **PostgreSQL 18 + pgvector 0.8.7** (Docker, `docker-compose.yml`; Python `psycopg` 3 + `pgvector`), kesin arama, `vectorStore.type: "pgvector"` (27.11'den beri varsayılan). Yedek: FAISS `IndexFlatIP` (`faiss-cpu`), `"flat"`; metin/metadata `index.json`'da. İkisi aynı sonucu veriyor (`tests/store_compare_test.py`). Büyürse pgvector'de HNSW indeksi |
-| Reranker | Aday: `BAAI/bge-reranker-v2-m3` (adım 8, denenmedi) |
+| Reranker | Yok. `BAAI/bge-reranker-v2-m3` ve `Alibaba-NLP/gte-multilingual-reranker-base` denendi (27.11), CPU'da çok yavaş, kazanç küçük |
 | LLM | Gemini `gemini-3.5-flash-lite` (Python `google-genai` 3.6, Node `@google/genai`); cevap ve yönlendirme (adım 9, soru başına tek çağrı). Ücretsiz plan: dakikada 15 istek |
 | Proje ayarları | `projects/<id>/project.json` (Python ve Node ortak) |
 | Web (Part 2–3) | Node.js 22+, Express 5, HTML/CSS/vanilla JS |
@@ -403,16 +463,17 @@ Not: FAISS tek dosyalık yerel bir indeks; pgvector ise Python, ileride Node bac
 - `rag/schema.sql` — pgvector tabloları (`rag_indexes`: proje başına model/boyut/ayarlar; `rag_chunks`: metin + `metadata` jsonb + `embedding vector` + `position`). `IF NOT EXISTS`, `embed.py` her çalışmada uygular.
 - `rag/pgstore.py` — veritabanı işleri: `connect`, `write_index` (yaz + doğrula), `load_index`, `search` (`ORDER BY embedding <=> q`, puan `1 - mesafe`). Bağlantı bilgisi `config.db_settings()`.
 - `rag/config.py › db_settings()` — `.env › DATABASE_URL` varsa onu, yoksa `docker/db.env`'deki `POSTGRES_*` değerlerini kullanır (sunucu `DB_HOST`/`DB_PORT`, varsayılan `127.0.0.1:5432`). Şifre tek yerde (`db.env`) durur. **`localhost` kullanılmaz:** Windows'ta önce IPv6'ya (`::1`) gidiyor, compose portu yalnızca `127.0.0.1`'de açtığı için bağlantı zaman aşımına kadar bekliyor (ölçüm: `localhost` 10 sn, `127.0.0.1` 27 ms; depoyu açma 5.3 sn → 0.2 sn).
-- `rag/search.py` — `Retriever` ve tek soru araması (`"soru"`, `--top N`). İçinde `FaissStore` ve `PgStore`; `vectorStore.type` hangisinin kullanılacağını seçer, dışarıya verilenler (`search`, `chunks`, `section`, `title`) aynı. Açılışta model adı ve vektör boyutu depodakiyle karşılaştırılır.
-- `tests/retrieval_test.py` — retrieval soru seti (`--top N`). Rapor: Hit@1/3/5, MRR, ilk K'ya giremeyenler, grup bazında puan aralıkları ve `minScore` ile ayrım yapılıp yapılamadığı.
+- `rag/rewrite.py` — `QueryRewriter`: `project.json › queryRewrite.rules` ile soruyu belgenin diline yaklaştırır; kural uymazsa `None` (27.11).
+- `rag/search.py` — `Retriever` ve tek soru araması (`"soru"`, `--top N`, `--no-rewrite`). `search_dense` yalnızca embedding araması; `search` query rewriting açıksa iki aramayı birleştirir (şu an `rrf_merge`, karar bekliyor), `last_rewrites` son aramada üretilen soruları tutar. İçinde `FaissStore` ve `PgStore`; `vectorStore.type` hangisinin kullanılacağını seçer, dışarıya verilenler (`search`, `chunks`, `section`, `title`) aynı. Açılışta model adı ve vektör boyutu depodakiyle karşılaştırılır.
+- `tests/retrieval_test.py` — retrieval soru seti (`--top N`, `--no-rewrite`; yeniden yazılan soruyu da yazdırır). Rapor: Hit@1/3/5, MRR, ilk K'ya giremeyenler, grup bazında puan aralıkları ve `minScore` ile ayrım yapılıp yapılamadığı.
 - `tests/store_compare_test.py` — FAISS ve pgvector aynı sonucu veriyor mu (iki depo da önceden üretilmiş olmalı): her depoda Hit@K/MRR, ilk 1/5/20 aynı mı, 186 chunk'ın tam sıralaması, puan farkı, hız (açılış, soru başına arama). Açıklamalı Markdown rapor `eval/reports/store-compare-<zaman>.md` (`--no-save` ile yazmaz).
 - `docker-compose.yml`, `docker/initdb/01-vector.sql`, `docker/db.env(.example)` — veritabanı container'ı (bkz. "Ara iş").
 - `projects/yonerge/eval/testset.jsonl` — cevap test seti. Her satır `{id, question, expect, sections?, note?}`; `expect` ∈ `geçersiz` / `cevap` / `bilgi_yok` / `sohbet`; `sections` yalnızca kaynak kontrolü yapılacak `cevap` sorularında. Yol `eval.testset` ile değiştirilebilir.
 - `projects/yonerge/prompts/system.md` — cevap prompt'u (adım 9; `{organization}`, `{assistantName}`).
 - `projects/yonerge/prompts/messages.json` — `geçersiz`, `bilgi_yok`, `hata` sabit cevapları (`{organization}` gibi değişkenler doldurulur).
 - `rag/answer.py` — uçtan uca cevap (`Assistant`). Tek soru, `--dry-run`.
-- `tests/answer_test.py` — cevap test seti; `--only`, `--no-save`. Ekran özeti: tür doğruluğu, karışıklık tablosu, kaynak doğruluğu, uydurma riski, fazla temkin, gecikme. Sonuç `eval/results/answer-<zaman>.json` (yol `eval.resultsDir`).
-- `tests/report.py` — sonuç JSON'undan Markdown rapor (`eval/reports/`, yol `eval.reportsDir`). `--compare <eski.json>`, `--stdout`. Elle inceleme notlarını `eval/review.jsonl`'dan (yol `eval.review`) okur.
+- `tests/answer_test.py` — cevap test seti; `--only`, `--no-save`, `--no-rewrite` (sonuçta her sorunun `rewrite` alanı). Ekran özeti: tür doğruluğu, karışıklık tablosu, kaynak doğruluğu, uydurma riski, fazla temkin, gecikme. Sonuç `eval/results/answer-<zaman>.json` (yol `eval.resultsDir`).
+- `tests/report.py` — sonuç JSON'undan Markdown rapor (`eval/reports/`, yol `eval.reportsDir`). `--compare <eski.json>` (27.11'den beri retrieval satırları da: beklenen bölüm 1. sırada / LLM'e giden parçalarda, query rewriting açık mı), `--stdout`. Elle inceleme notlarını `eval/review.jsonl`'dan (yol `eval.review`) okur.
 - `projects/yonerge/eval/review.jsonl` — elle inceleme notları (bkz. 9. adım).
 - Eski routing (`rag/route.py`, `prompts/routing.md`, `eval/routing.jsonl`) 26.11'de silindi; `7fafda0` commit'inde duruyor.
 - `requirements.txt` — `pymupdf`, `sentence-transformers` (PyTorch ile gelir), `langchain-text-splitters`, `faiss-cpu`, `google-genai`, `psycopg[binary]`, `pgvector`. Model (~1.1 GB) ilk kullanımda Hugging Face'ten bir kez indirilir. `.venv` `uv` ile kurulu (içinde `pip` yok): `uv pip install --python .venv\Scripts\python.exe -r requirements.txt`.
@@ -430,7 +491,7 @@ python rag/extract.py              # 1   → pages.json  (veya --project yonerge
 python rag/chunk.py                # 1–2 → chunks.json
 python rag/embed.py                # 3–4 → veritabanı (pgvector) ya da index.json + faiss.index (flat)
 python tests/store_compare_test.py # iki depo da üretildiyse: FAISS = pgvector mi
-python rag/search.py "Ortak alanlar nasıl kullanılır?"   # 6–7 tek soru
+python rag/search.py "Ortak alanlar nasıl kullanılır?"   # 6–7 tek soru (--no-rewrite: query rewriting kapalı)
 python tests/retrieval_test.py    # 6–7 soru seti deneyi (Hit@K, MRR)
 python rag/answer.py "Firma kabul şartları nelerdir?"   # 9 cevap + kaynaklar
 python rag/answer.py "Merhaba" --dry-run                 # 9 prompt'u göster (anahtar gerekmez)
@@ -505,3 +566,7 @@ Bu boyutta kesin arama daha hızlı ve ayarsız. Ölçüm sırasında `hnswlib`'
 **27.11.2026 — Vector DB: MySQL yerine PostgreSQL + pgvector:** mentor "önce MySQL, vektör araması yoksa başka DB" demişti. MySQL 9.7.4 (LTS) container'ı açıldı ama mesafe fonksiyonu denenmeden bırakıldı; yani "MySQL'de yok" sonucu ölçülmedi. Gerekçe: Community sürümünde vektör mesafe fonksiyonu belirsizdi (`VECTOR` tipi var, `DISTANCE` HeatWave'e özel biliniyordu), pgvector'de cosine mesafesi (`<=>`) ve ileride gerekirse HNSW indeksi kesin olarak var, Python desteği (`psycopg`, `pgvector`) ve RAG örnekleri yaygın. Image `pgvector/pgvector:0.8.7-pg18`: pgvector'ün en yeni sürümü, PostgreSQL 19 yerine bir yıllık 18 (kararlılık). Resmî `postgres` image'ında pgvector olmadığı için (Dockerfile gerekirdi) pgvector'ün kendi image'ı seçildi. DB ayarları `.env`'den ayrı `docker/db.env`'de, çünkü `.env`'deki Gemini anahtarı container'a girmemeli.
 
 **27.11.2026 — Vektör deposu pgvector'e taşındı (aşama 2–5):** iki tablo: `rag_indexes` (proje başına, `index.json` üst kısmı) ve `rag_chunks` (chunk başına; metin, `metadata` jsonb, `embedding`, `position`). Tek ortak tablo + `project` sütunu, çünkü yeni proje paketi kod değişikliği olmadan aynı tablolara girmeli. `embedding` boyutsuz `vector` (A seçeneği): farklı modelli projeler aynı tabloda durabilir; boyut kontrolünü `embed.py`/`search.py` `rag_indexes.dimensions` ile yapar (bedeli: DB yanlış boyutu kendisi reddetmez; HNSW gerekirse ifade indeksi gerekir; 186 chunk'ta gerek yok). Metadata sütunlara bölünmedi (jsonb), çünkü kaynak türüne göre değişebilir. `position` FAISS'in "vektör i = chunks[i]" sözleşmesini korur; böylece `Retriever`'ın dışarıya verdikleri aynı kaldı ve `answer.py` ile `tests/` değişmedi. `embed.py` tek transaction'da siler-yazar-doğrular (yarım indeks kalmaz). Bağlantı şifresi `docker/db.env`'den okunuyor (`DATABASE_URL` ile ezilebilir); `.env`'e kopyalanmadı. FAISS silinmedi: karşılaştırma (`tests/store_compare_test.py`) ve Docker'sız yedek (`"flat"`). Sonuç FAISS'le aynı: Hit@5 10/10, MRR 0.817.
+
+**27.11.2026 — Reranking denendi, çıkarıldı:** dense ilk 50 aday cross-encoder ile yeniden sıralandı (`project.json › rerank`, kod `rag/rerank.py`). İki çok dilli model denendi: `BAAI/bge-reranker-v2-m3` (568M) MRR 0.840, Hit@1 8/10, Hit@5 9/10 (q01 3. → 15.), soru başına ~32 sn; `Alibaba-NLP/gte-multilingual-reranker-base` (306M) MRR 0.850, Hit@1 8/10, Hit@5 10/10, soru başına ~98 sn (küçük olmasına rağmen yavaş, sebebi araştırılmadı). GPU kullanılamıyor; aday sayısını düşürmek q01'e yaramaz (doğru parçalar 28–33. sırada). Kazanç (10 soruda +1 Hit@1) bu süreye değmedi; kalan hatalar (q01, q21, z09) sıralamadan değil kelime uyuşmazlığından ve çok parçalı sorudan geliyor. Kullanıcı kararıyla reranker kaldırıldı, kod commit'lenmeden geri alındı. Model seçimi önce kısıtlar (Türkçe, lisans, boyut, CPU süresi) konuşulmadan yapılmıştı; ders: seçimden önce kısıtları belirle. Yan bulgu: gte konu dışı soruları puanla net ayırıyor (boşluk 0.31; cosine'de 0.02). Sırada query rewriting.
+
+**27.11.2026 — Query rewriting: kural listesi, birleştirme yöntemi karar bekliyor:** LLM ile yeniden yazma yerine kural listesi seçildi (kullanıcı): ücretsiz, anında, deterministik; İngilizce ve çok parçalı sorular kapsam dışı. Kurallar belgenin kendi terimlerinden (firma → Girişimci, teknopark → Bölge, uymaz/ihlal/ceza → aykırı faaliyet); `şirket` "Yönetici Şirket" ile karışacağı için konmadı. Kod `rag/rewrite.py`, ayar `project.json › queryRewrite`, çekirdekte kelime yok. İlk uygulama orijinal + yeni soruyu RRF ile birleştiriyor; ölçümde en kötü yöntem çıktı (q01 3. → 6., testset Hit@5 31 → 30). "Yalnızca yeni soru" en iyi (testset MRR 0.808 → 0.825, q21 9. → 2.) ama q24'ü bozuyor (2. → 7.). Kazanç küçük ve kurallar başarısız sorular bilinerek seçildiği için iyimser. Kullanıcı kararı sonraya bıraktı; kodda RRF duruyor, LLM testi yapılmadı.

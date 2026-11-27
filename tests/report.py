@@ -180,6 +180,13 @@ def hit_rank(r: dict) -> int | None:
     return None
 
 
+def rank_stat(rows: list[dict], at: int | None) -> str:
+    """Beklenen bölümü olan sorularda bölüm ilk `at` parçada mı (None = LLM'e giden parçaların herhangi birinde)."""
+    g = [r for r in rows if r.get("sections")]
+    ranks = [hit_rank(r) for r in g]
+    return pct(sum(1 for x in ranks if x and (at is None or x <= at)), len(g))
+
+
 # ---- rapor
 def build_report(data: dict, result_path: Path, compare: dict | None) -> str:
     rows, s, st = data["results"], summarize(data), data["settings"]
@@ -188,7 +195,8 @@ def build_report(data: dict, result_path: Path, compare: dict | None) -> str:
     out += [f"- **Çalıştırma:** {data['createdAt']} · `{display(result_path)}`",
             f"- **Test seti:** `{data['testset']}`, {s['n']} soru" + ("" if data.get("complete", True) else " (kısmi çalıştırma)"),
             f"- **Ayarlar:** model `{st['model']}`, temperature {st['temperature']}, topK {st['topK']}, "
-            f"embedding `{st['embedding']}`, system prompt `{st['systemPromptSha1']}`",
+            f"embedding `{st['embedding']}`, system prompt `{st['systemPromptSha1']}`, query rewriting "
+            + ("açık" if st.get("queryRewrite") else "kapalı"),
             f"- **Akış:** girdi kontrolü → retrieval ({STORE_LABELS.get(st.get('vectorStore', 'flat'), st.get('vectorStore'))}"
             ", ilk topK parça) → tek LLM çağrısı (JSON şeması: "
             "`cevap` / `bilgi_yok` / `sohbet` + kullanılan parça numaraları) → kaynaklar backend'de", ""]
@@ -225,6 +233,9 @@ def build_report(data: dict, result_path: Path, compare: dict | None) -> str:
         out += table(["Ölçüm", "Önceki", "Bu"], [
             ["Tür doğruluğu (otomatik)", pct(c["type_ok"], c["n"]), pct(s["type_ok"], s["n"])],
             ["Kaynak doğruluğu", pct(*c["source_ok"]), pct(*s["source_ok"])],
+            ["Retrieval: beklenen bölüm 1. sırada", *[rank_stat(x["results"], 1) for x in (compare, data)]],
+            ["Retrieval: beklenen bölüm LLM'e giden parçalarda", *[rank_stat(x["results"], None) for x in (compare, data)]],
+            ["Query rewriting", *["açık" if x["settings"].get("queryRewrite") else "kapalı" for x in (compare, data)]],
             ["Ortalama gecikme", f"{c['ms']['mean']:.0f} ms" if c["ms"] else "—",
              f"{s['ms']['mean']:.0f} ms" if s["ms"] else "—"],
         ]) + [""]
